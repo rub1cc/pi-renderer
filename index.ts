@@ -19,6 +19,8 @@ import {
   writeRenderers,
 } from "./renderers.ts";
 import { installGenericToolRenderer } from "./generic.ts";
+import { installSilentAbortRecovery } from "./cancellation.ts";
+import { registerWebMessageRenderers } from "./web.ts";
 
 type AnyDefinition = ToolDefinition<any, any, any>;
 type DefinitionFactory = (cwd: string) => AnyDefinition;
@@ -59,6 +61,9 @@ function registerRenderedTool(
   pi.registerTool({
     ...initial,
     ...renderers,
+    // Permission policy resolves and pins paths in a pre-execution hook.
+    // Sequential batches prevent another tool call from retargeting them.
+    executionMode: "sequential",
     async execute(toolCallId, params, signal, onUpdate, context) {
       const definition = getDefinition(factory, context.cwd);
       return definition.execute(
@@ -75,6 +80,8 @@ function registerRenderedTool(
 /** Register Codex-style presentation without changing built-in behavior. */
 export function registerCodexRenderers(pi: ExtensionAPI): void {
   installGenericToolRenderer();
+  installSilentAbortRecovery(pi);
+  registerWebMessageRenderers(pi);
   registerRenderedTool(pi, createReadToolDefinition, readRenderers);
   registerRenderedTool(pi, createGrepToolDefinition, grepRenderers);
   registerRenderedTool(pi, createFindToolDefinition, findRenderers);
@@ -95,7 +102,16 @@ export {
   createCodexBashRenderers,
 } from "./renderers.ts";
 export {
+  createAgentToolRenderers,
   createGenericToolRenderers,
   installGenericToolRenderer,
 } from "./generic.ts";
+export {
+  SilentAbortRecovery,
+  installSilentAbortRecovery,
+} from "./cancellation.ts";
+export {
+  createWebToolRenderers,
+  registerWebMessageRenderers,
+} from "./web.ts";
 

@@ -24,7 +24,14 @@ import {
   readRenderers,
   writeRenderers,
 } from "../renderers.ts";
-import { createGenericToolRenderers } from "../generic.ts";
+import {
+  createAgentToolRenderers,
+  createGenericToolRenderers,
+} from "../generic.ts";
+import {
+  createWebToolRenderers,
+  registerWebMessageRenderers,
+} from "../web.ts";
 
 beforeAll(async () => {
   await initTheme("light", false);
@@ -309,6 +316,163 @@ describe("generic extension-tool renderer", () => {
       ctx,
     );
     expect(render(output).join("\n")).toContain("boom");
+  });
+
+  test("adapts Agent progress and completion to bullet states", () => {
+    const renderers = createAgentToolRenderers();
+    const args = {
+      description: "Review renderer behavior",
+      subagent_type: "Explore",
+    };
+    const state = {};
+    const active = context(args, state, { isPartial: true });
+    const call = renderers.renderCall(args, theme, active);
+    expect(render(call).join("\n")).toContain(
+      "Running Review renderer behavior",
+    );
+
+    const progress = renderers.renderResult(
+      textResult("", {
+        status: "running",
+        description: "Review renderer behavior",
+        activity: "searching files…",
+        modelName: "haiku",
+        turnCount: 2,
+        maxTurns: 8,
+        toolUses: 3,
+        tokens: "4.2k token",
+      }),
+      { expanded: false, isPartial: true },
+      theme,
+      active,
+    );
+    expect(render(call).join("\n")).toContain("haiku");
+    expect(render(progress).join("\n")).toContain("searching files…");
+
+    const completed = { ...active, isPartial: false, lastComponent: progress };
+    const output = renderers.renderResult(
+      textResult("one\ntwo\nthree\nfour", {
+        status: "completed",
+        description: "Review renderer behavior",
+        durationMs: 2_500,
+        toolUses: 4,
+      }),
+      { expanded: false, isPartial: false },
+      theme,
+      completed,
+    );
+    expect(render(call).join("\n")).toContain(
+      "Ran Review renderer behavior",
+    );
+    expect(render(call).join("\n")).toContain("2.5s");
+    expect(render(output).join("\n")).toContain("+1 line");
+    expect(renderers.renderShell).toBe("self");
+  });
+
+  test("renders Agent results without metadata as ordinary calls", () => {
+    const renderers = createAgentToolRenderers();
+    const args = {
+      description: "Resume old agent",
+      subagent_type: "general-purpose",
+    };
+    const state = {};
+    const ctx = context(args, state);
+    const call = renderers.renderCall(args, theme, ctx);
+    const output = renderers.renderResult(
+      textResult('Agent not found: "old-id".'),
+      { expanded: false, isPartial: false },
+      theme,
+      ctx,
+    );
+    expect(render(call).join("\n")).toContain("Called Resume old agent");
+    expect(render(output).join("\n")).toContain("Agent not found");
+  });
+});
+
+describe("web extension renderers", () => {
+  test("renders web search progress and results as a flat activity", () => {
+    const renderers = createWebToolRenderers("web_search", "Web Search")!;
+    const args = { queries: ["first query", "second query", "third query"] };
+    const state = {};
+    const active = context(args, state, { isPartial: true });
+    const call = renderers.renderCall(args, theme, active);
+    expect(render(call).join("\n")).toContain("Searching 3 queries");
+
+    const progress = renderers.renderResult(
+      textResult('Searching "second query" (1/3 complete)...', {
+        phase: "search",
+        progress: 1 / 3,
+        currentQuery: "second query",
+      }),
+      { expanded: false, isPartial: true },
+      theme,
+      active,
+    );
+    expect(render(progress).join("\n")).toContain("second query");
+
+    const completed = { ...active, isPartial: false, lastComponent: progress };
+    const output = renderers.renderResult(
+      textResult("summary\nsource one\nsource two\nsource three", {
+        queryCount: 3,
+        successfulQueries: 3,
+        totalResults: 15,
+        fetchUrls: ["https://one.test", "https://two.test"],
+      }),
+      { expanded: false, isPartial: false },
+      theme,
+      completed,
+    );
+    expect(render(call).join("\n")).toContain("Searched 3 queries");
+    expect(render(call).join("\n")).toContain("3/3 queries · 15 sources");
+    expect(render(output).join("\n")).toContain("+1 line");
+    expect(renderers.renderShell).toBe("self");
+  });
+
+  test("uses semantic headers for the remaining web tools", () => {
+    const cases = [
+      ["source_check", { claim: "The claim" }, "Checked The claim"],
+      ["fetch_content", { url: "https://example.test/page" }, "Fetched https://example.test/page"],
+      ["get_search_content", { responseId: "search-result-id" }, "Read search-result-id"],
+    ] as const;
+
+    for (const [name, args, expected] of cases) {
+      const renderers = createWebToolRenderers(name)!;
+      const ctx = context(args, {});
+      const call = renderers.renderCall(args, theme, ctx);
+      expect(render(call).join("\n")).toContain(expected);
+      expect(renderers.renderShell).toBe("self");
+    }
+  });
+
+  test("renders web fetch notifications without a message card", () => {
+    const registered = new Map<string, Function>();
+    registerWebMessageRenderers({
+      registerMessageRenderer(type: string, renderer: Function) {
+        registered.set(type, renderer);
+      },
+    } as any);
+
+    const ready = registered.get("web-search-content-ready")!;
+    const component = ready(
+      {
+        content: "Content fetched for 2/2 URLs. Full page content now available.",
+      },
+      { expanded: false, outputPad: 1 },
+      theme,
+    );
+    const output = render(component).join("\n");
+    expect(output).toContain("Fetched web content");
+    expect(output).toContain("Content fetched for 2/2 URLs");
+
+    const failed = registered.get("web-search-error")!;
+    const errorOutput = render(
+      failed(
+        { content: "Content fetch failed: unavailable" },
+        { expanded: false, outputPad: 1 },
+        theme,
+      ),
+    ).join("\n");
+    expect(errorOutput).toContain("Web content fetch failed");
   });
 });
 

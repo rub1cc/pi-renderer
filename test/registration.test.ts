@@ -8,11 +8,20 @@ import registerSandbox from "../../sandbox/index.ts";
 describe("renderer registration", () => {
   test("registers six non-bash definitions with self-rendered shells", () => {
     const tools: any[] = [];
+    const handlers: Array<[string, unknown]> = [];
+    const messageRenderers: string[] = [];
     registerCodexRenderers({
+      on(name: string, handler: unknown) {
+        handlers.push([name, handler]);
+        return () => {};
+      },
       registerTool(tool: unknown) {
         tools.push(tool);
       },
-    } as ExtensionAPI);
+      registerMessageRenderer(customType: string) {
+        messageRenderers.push(customType);
+      },
+    } as unknown as ExtensionAPI);
 
     expect(tools.map((tool) => tool.name)).toEqual([
       "read",
@@ -24,8 +33,14 @@ describe("renderer registration", () => {
     ]);
     expect(tools.some((tool) => tool.name === "bash")).toBe(false);
     expect(tools.some((tool) => tool.name === "apply_patch")).toBe(false);
+    expect(handlers.some(([name]) => name === "input")).toBe(true);
+    expect(messageRenderers).toEqual([
+      "web-search-content-ready",
+      "web-search-error",
+    ]);
     for (const tool of tools) {
       expect(tool.renderShell).toBe("self");
+      expect(tool.executionMode).toBe("sequential");
       expect(typeof tool.execute).toBe("function");
       expect(typeof tool.renderCall).toBe("function");
       expect(typeof tool.renderResult).toBe("function");
@@ -52,22 +67,28 @@ describe("renderer registration", () => {
     } as unknown as ExtensionAPI);
 
     expect(tools).toHaveLength(1);
-    expect(tools[0].name).toBe("bash");
-    expect(tools[0].label).toBe("bash (sandboxed)");
-    expect(tools[0].renderShell).toBe("self");
-    expect(tools[0].renderCall).toBe(codexBashRenderers.renderCall);
-    expect(tools[0].renderResult).toBe(codexBashRenderers.renderResult);
-    expect(typeof tools[0].execute).toBe("function");
+    const bash = tools[0];
+    expect(bash.name).toBe("bash");
+    expect(bash.label).toBe("bash (sandboxed)");
+    expect(bash.renderShell).toBe("self");
+    expect(bash.renderCall).toBe(codexBashRenderers.renderCall);
+    expect(bash.renderResult).toBe(codexBashRenderers.renderResult);
+    expect(bash.executionMode).toBe("sequential");
+    expect(typeof bash.execute).toBe("function");
     expect(handlers.some(([name]) => name === "user_bash")).toBe(true);
   });
 
-  test("adds presentation to renderer-less extension tools only", () => {
+  test("adds generic presentation and adapts the Agent card", () => {
     const tools: any[] = [];
     registerCodexRenderers({
+      on() {
+        return () => {};
+      },
       registerTool(tool: unknown) {
         tools.push(tool);
       },
-    } as ExtensionAPI);
+      registerMessageRenderer() {},
+    } as unknown as ExtensionAPI);
 
     const taskDefinition = {
       name: "TaskList",
@@ -88,6 +109,37 @@ describe("renderer registration", () => {
     expect(typeof resolved.renderCall).toBe("function");
     expect(typeof resolved.renderResult).toBe("function");
     expect(resolved.execute).toBe(taskDefinition.execute);
+
+    const agentRenderCall = () => ({ render: () => [], invalidate() {} });
+    const agentDefinition = {
+      ...taskDefinition,
+      name: "Agent",
+      renderCall: agentRenderCall,
+    };
+    const adaptedAgent = lookup.call(
+      { session: { getToolDefinition: () => agentDefinition } },
+      "Agent",
+    );
+    expect(adaptedAgent.renderShell).toBe("self");
+    expect(adaptedAgent.renderCall).not.toBe(agentRenderCall);
+    expect(typeof adaptedAgent.renderResult).toBe("function");
+    expect(adaptedAgent.execute).toBe(agentDefinition.execute);
+
+    const searchRenderCall = () => ({ render: () => [], invalidate() {} });
+    const searchDefinition = {
+      ...taskDefinition,
+      name: "web_search",
+      label: "Web Search",
+      renderCall: searchRenderCall,
+    };
+    const adaptedSearch = lookup.call(
+      { session: { getToolDefinition: () => searchDefinition } },
+      "web_search",
+    );
+    expect(adaptedSearch.renderShell).toBe("self");
+    expect(adaptedSearch.renderCall).not.toBe(searchRenderCall);
+    expect(typeof adaptedSearch.renderResult).toBe("function");
+    expect(adaptedSearch.execute).toBe(searchDefinition.execute);
 
     const customRenderCall = () => ({ render: () => [], invalidate() {} });
     const alreadyRendered = { ...taskDefinition, name: "Custom", renderCall: customRenderCall };

@@ -23,7 +23,10 @@ presentation inspired by the Codex CLI:
 - Tail previews for shell output and leading previews for search/file output.
 - Width-aware wrapping, tree gutters, errors, edit statistics, and shell
   durations.
-- Execution results and model-facing content are unchanged.
+- Claude Code-style cancellation when Escape aborts before any tool starts: the
+  empty aborted turn is removed and the submitted prompt returns to the editor.
+  Aborts after tool execution remain visible in the transcript.
+- Tool execution payloads and completed-turn model content are unchanged.
 
 The extension registers `read`, `grep`, `find`, `ls`, `write`, and `edit`.
 It deliberately does not register `bash` or `apply_patch`.
@@ -39,6 +42,19 @@ fallback:
 The fallback is applied only at Pi's final interactive presentation lookup. It
 does not re-register the tool or replace its execution function, and tools that
 already provide either renderer callback remain untouched.
+
+The `Agent` tool is the deliberate exception. `pi-subagents` supplies a
+Claude-style full-width card, so the renderer replaces only its presentation
+with flat `Running`/`Ran`/`Started` bullet states and a bounded activity/result
+tree. Agent execution and progress metadata are preserved. Other rich custom
+renderers, including `SubagentWorkflow`, remain untouched.
+
+The web-access tools are also adapted because their native search/fetch cards
+use a full-width shell. `web_search`, `source_check`, `fetch_content`, and
+`get_search_content` receive semantic bullet states while keeping their
+model-facing results unchanged. Background content-ready and fetch-error
+messages use the same flat activity-and-tree layout instead of Pi's default
+purple custom-message card.
 
 ## Bash and sandboxing
 
@@ -56,10 +72,16 @@ duplicate registration that could otherwise bypass OS-level sandboxing.
   bash renderer.
 - `generic.ts` supplies presentation for renderer-less third-party tools
   without taking ownership of their execution.
+- `web.ts` adapts pi-web-access tools and asynchronous fetch notifications
+  without changing their search, fetch, or storage behavior.
+- `cancellation.ts` restores no-action aborted prompts and moves the append-only
+  session onto a hidden marker branch so the cancellation survives restart.
 - `index.ts` registers only the safe non-bash built-in overrides.
 
 Codex combines consecutive reads, searches, and listings into one `Explored`
 history cell. Pi's public renderer API operates on one tool call at a time, so
-this extension adopts Codex's visual language without unsafe transcript-level
-interception.
+the tool presentation adopts Codex's visual language without taking ownership
+of execution. No public API currently exists for removing an empty aborted
+turn, so `cancellation.ts` limits its TUI-only patch to that behavior and leaves
+aborts after tool execution on Pi's normal path.
 
