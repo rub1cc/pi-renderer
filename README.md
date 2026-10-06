@@ -49,6 +49,23 @@ pi -e npm:@rub1cc/pi-renderer
   Aborts after tool execution remain visible in the transcript.
 - Tool execution payloads and completed-turn model content are unchanged.
 
+### Consecutive reads
+
+Consecutive reads in the same assistant message collapse into `Read N files`.
+Repeated paths count once, with the number of calls shown separately. Groups
+stop at text, thinking, another tool, or a different assistant message.
+
+In fullscreen, click the group header to reveal individual calls, then click a
+file's row to expand its contents. Closing a group preserves individual row
+state. Pi's global tool expansion shortcut (default `ctrl+o`) expands/collapses
+both groups and their contents, including in regular terminal mode. Failures
+remain visible in collapsed group summaries.
+
+This is transcript-only grouping: original tool components, arguments, results,
+and session records are retained. HTML exports remain ungrouped. It uses guarded
+private transcript hooks tested against Pi 1.0.2; unknown host/component shapes
+fall back to normal per-call rendering.
+
 The extension registers `read`, `grep`, `find`, `ls`, `write`, and `edit`.
 It deliberately does not register `bash` or `apply_patch`.
 `edit` and `write` are registered with hidden exposure: they are unavailable to
@@ -105,6 +122,8 @@ source. Before publishing, verify `npm pack --dry-run` includes the bundled
   bash renderer.
 - `generic.ts` supplies presentation for renderer-less third-party tools
   without taking ownership of their execution.
+- `read-groups.ts` decorates the interactive transcript with expandable read
+  groups while retaining original tool rows for native keyboard/mouse behavior.
 - `web.ts` adapts pi-web-access tools and asynchronous fetch notifications
   without changing their search, fetch, or storage behavior.
 - `cancellation.ts` restores no-action aborted prompts and moves the append-only

@@ -14,6 +14,7 @@
     "components.ts",
     "generic.ts",
     "renderers.ts",
+    "read-groups.ts",
     "web.ts",
     "README.md"
   ],
