@@ -1,10 +1,22 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import {
+  DEFAULT_DIFF_RENDERER_CONFIG,
+  normalizeApplyPatchDetails,
+  renderUnifiedDiff,
+} from "@rub1cc/pi-apply-patch/renderer";
 import type {
   AgentToolResult,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
+  CompactionSummaryMessageComponent,
+  getMarkdownTheme,
+  initTheme,
+} from "@earendil-works/pi-coding-agent";
+import {
+  getKeybindings,
+  KeybindingsManager,
+  setKeybindings,
   stripTerminalSequences,
   visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -28,6 +40,10 @@ import {
   createAgentToolRenderers,
   createGenericToolRenderers,
 } from "../generic.ts";
+import {
+  createCompactionTranscriptComponent,
+  installCompactionRenderer,
+} from "../compaction.ts";
 import {
   createWebToolRenderers,
   registerWebMessageRenderers,
@@ -116,6 +132,78 @@ describe("shared components", () => {
     const lines = component.render(12);
     expect(lines.every((line) => visibleWidth(line) <= 12)).toBe(true);
     expect(render(component, 12).join(" ")).toContain("red");
+  });
+});
+
+describe("compaction renderer", () => {
+  test("keeps click-to-expand behavior", () => {
+    let toggles = 0;
+    const component = createCompactionTranscriptComponent(
+      { summary: "Summary", tokensBefore: 100 },
+      false,
+      getMarkdownTheme(),
+      () => toggles++,
+    ) as any;
+
+    component.render(80);
+    expect(
+      component.handleMouse({
+        type: "click",
+        button: "left",
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 1,
+      }),
+    ).toEqual({ handled: true });
+    expect(toggles).toBe(1);
+  });
+
+  test("replaces the card with a flat expandable transcript row", () => {
+    installCompactionRenderer();
+    const component = new CompactionSummaryMessageComponent(
+      {
+        role: "compactionSummary",
+        summary: "## Current state\n\nKeep the renderer compact.",
+        tokensBefore: 250_014,
+        timestamp: Date.now(),
+      },
+      getMarkdownTheme(),
+    );
+
+    const collapsed = render(component);
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0]).toContain("• Compacted context");
+    expect(collapsed[0]).toContain("250,014 tokens");
+    expect(collapsed[0]).toContain("to expand");
+    expect(collapsed[0]).not.toContain("[compaction]");
+    expect(collapsed[0]).not.toContain("Current state");
+
+    component.setExpanded(true);
+    const expanded = render(component);
+    expect(expanded[0]).toContain("• Compacted context");
+    expect(expanded.join("\n")).toContain("Current state");
+    expect(expanded.join("\n")).toContain("Keep the renderer compact.");
+    expect(expanded.slice(1).some((line) => line.includes("└"))).toBe(true);
+    expect(expanded.every((line) => visibleWidth(line) <= 80)).toBe(true);
+  });
+
+  test("stays within narrow terminal widths", () => {
+    installCompactionRenderer();
+    const component = new CompactionSummaryMessageComponent(
+      {
+        role: "compactionSummary",
+        summary: "A long summary line that needs to wrap safely.",
+        tokensBefore: 12_345,
+        timestamp: Date.now(),
+      },
+      getMarkdownTheme(),
+    );
+
+    component.setExpanded(true);
+    expect(component.render(18).every((line) => visibleWidth(line) <= 18)).toBe(
+      true,
+    );
   });
 });
 
@@ -258,7 +346,7 @@ describe("built-in renderers", () => {
     expect(render(expanded).join("\n")).toContain("four");
   });
 
-  test("adds edit statistics and a collapsed diff", () => {
+  test("shows small edit diffs completely without expanding", () => {
     const args = {
       path: "src/a.ts",
       edits: [{ oldText: "old", newText: "new" }],
@@ -266,7 +354,7 @@ describe("built-in renderers", () => {
     const state = {};
     const ctx = context(args, state);
     const call = editRenderers.renderCall(args, theme, ctx);
-    editRenderers.renderResult(
+    const output = editRenderers.renderResult(
       textResult("Successfully replaced 1 block(s) in src/a.ts.", {
         diff: " 1 before\n-2 old\n+2 new\n 3 after",
         patch: "",
@@ -276,6 +364,112 @@ describe("built-in renderers", () => {
       { ...ctx, lastComponent: undefined },
     );
     expect(render(call).join("\n")).toContain("Edited src/a.ts (+1 -1)");
+    expect(render(output)).toHaveLength(4);
+    expect(render(output).join("\n")).toContain("3 │  after");
+    expect(render(output).join("\n")).not.toContain("to expand");
+  });
+
+  test("uses the patch renderer's full-row backgrounds and gutters", () => {
+    const args = { path: "src/a.ts", edits: [] };
+    const diff = " 1 before\n-2 old value\n+2 new value\n 3 after";
+    const coloredTheme = {
+      ...theme,
+      bg: (color: string, text: string) =>
+        `\u001b[${color === "toolSuccessBg" ? 42 : 41}m${text}\u001b[49m`,
+    } as Theme;
+    const details = normalizeApplyPatchDetails({
+      changes: [{ type: "update", path: args.path, diff }],
+    })!;
+    for (const expanded of [false, true]) {
+      const output = editRenderers.renderResult(
+        textResult("", { diff }), { expanded, isPartial: false },
+        coloredTheme, context(args, {}),
+      );
+      const rows = output.render(80);
+      expect(rows).toEqual(renderUnifiedDiff(
+        details, 80, expanded, { ...DEFAULT_DIFF_RENDERER_CONFIG }, coloredTheme,
+      ).slice(1));
+      expect(rows[1]).toContain("\u001b[41m");
+      expect(rows[2]).toContain("\u001b[42m");
+      expect(rows[0]).not.toContain("\u001b[41m");
+      expect(rows[3]).not.toContain("\u001b[42m");
+      expect(visibleWidth(rows[1])).toBe(80);
+      expect(visibleWidth(rows[2])).toBe(80);
+      expect(render(output).join("\n")).not.toContain("Edited");
+    }
+  });
+
+  test("keeps errors and unknown persisted diff formats readable", () => {
+    const ctx = context({ path: "src/a.ts", edits: [] }, {});
+    const failed = editRenderers.renderResult(
+      textResult("Permission denied", { diff: "+1 ignored" }),
+      { expanded: false, isPartial: false }, theme,
+      { ...ctx, isError: true },
+    );
+    expect(render(failed).join("\n")).toContain("Permission denied");
+    const unknown = editRenderers.renderResult(
+      textResult("", { diff: "unrecognized legacy diff" }),
+      { expanded: true, isPartial: false }, theme, ctx,
+    );
+    expect(render(unknown).join("\n")).toContain("unrecognized legacy diff");
+  });
+
+  test("shows 24 diff rows before requiring expansion", () => {
+    const ctx = context({ path: "large.ts", edits: [] }, {});
+    for (const count of [24, 25]) {
+      const diff = Array.from({ length: count }, (_, i) => `+${i + 1} added_${i}`).join("\n");
+      const output = editRenderers.renderResult(
+        textResult("", { diff }),
+        { expanded: false, isPartial: false }, theme, ctx,
+      );
+      const rows = render(output);
+      expect(rows).toHaveLength(count === 24 ? 24 : 25);
+      expect(rows.join("\n").includes("1 more diff rows")).toBe(count === 25);
+    }
+  });
+
+  test("expands large diffs fully and can collapse a reused component", () => {
+    const previous = getKeybindings();
+    setKeybindings(new KeybindingsManager({
+      "app.tools.expand": { defaultKeys: "ctrl+o" },
+    }, { "app.tools.expand": ["ctrl+y"] }));
+    try {
+      const ctx = context({ path: "large.ts", edits: [] }, {});
+      const diff = Array.from({ length: 600 }, (_, i) => `+${i + 1} added_${i}`).join("\n");
+      const result = textResult("", { diff });
+      const collapsed = editRenderers.renderResult(
+        result, { expanded: false, isPartial: false }, theme, ctx,
+      );
+      expect(render(collapsed).join("\n")).toContain("ctrl+y to expand");
+      expect(render(collapsed).join("\n")).not.toContain("added_599");
+      const expanded = editRenderers.renderResult(
+        result, { expanded: true, isPartial: false }, theme,
+        { ...ctx, lastComponent: collapsed },
+      );
+      expect(expanded).toBe(collapsed);
+      expect(render(expanded)).toHaveLength(601);
+      expect(render(expanded).join("\n")).toContain("added_599");
+      expect(render(expanded).join("\n")).toContain("ctrl+y to collapse");
+      const restored = editRenderers.renderResult(
+        result, { expanded: false, isPartial: false }, theme,
+        { ...ctx, lastComponent: expanded },
+      );
+      expect(render(restored)).toHaveLength(26); // 24 rows, omission, shortcut
+      expect(render(restored).join("\n")).not.toContain("added_599");
+    } finally {
+      setKeybindings(previous);
+    }
+  });
+
+  test("wraps expanded long diff lines without losing their tail", () => {
+    const ctx = context({ path: "long.ts", edits: [] }, {});
+    const output = editRenderers.renderResult(
+      textResult("", { diff: `+1 ${"x".repeat(300)}TAIL_MARKER` }),
+      { expanded: true, isPartial: false }, theme, ctx,
+    );
+    const rows = render(output, 20);
+    expect(rows.every((row) => visibleWidth(row) <= 20)).toBe(true);
+    expect(rows.join("").replace(/\s|└|│/gu, "")).toContain("x".repeat(300) + "TAIL_MARKER");
   });
 });
 

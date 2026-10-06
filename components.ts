@@ -1,8 +1,9 @@
 import { homedir } from "node:os";
 import path from "node:path";
-import type {
-  AgentToolResult,
-  Theme,
+import {
+  keyText,
+  type AgentToolResult,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
   Text,
@@ -218,6 +219,7 @@ export interface TreeOutputOptions {
   theme: Theme;
   direction?: PreviewDirection;
   previewRows?: number;
+  showCollapseHint?: boolean;
   tone?: TreeTone;
 }
 
@@ -294,19 +296,26 @@ export class TreeOutputComponent implements Component {
         : visualLines.slice(0, limit);
     }
 
+    const shortcut = keyText("app.tools.expand");
+    const hint = (action: string) => shortcut
+      ? `${shortcut} to ${action}`
+      : `${action} tool output`;
     const omission = hidden > 0
       ? theme.fg(
           "muted",
           `… +${hidden} ${direction === "tail" ? "earlier " : ""}line${
             hidden === 1 ? "" : "s"
-          } (ctrl+e to expand)`,
+          } (${hint("expand")})`,
         )
       : undefined;
     const rows = omission
       ? direction === "tail"
         ? [omission, ...selected]
         : [...selected, omission]
-      : selected;
+      : [...selected];
+    if (expanded && this.options.showCollapseHint && visualLines.length > limit) {
+      rows.push(theme.fg("muted", `(${hint("collapse")})`));
+    }
 
     this.cachedLines = rows.map((line, index) => {
       const prefix = index === 0 ? fullPrefix : continuationPrefix;

@@ -20,6 +20,7 @@ import {
 } from "./renderers.ts";
 import { installGenericToolRenderer } from "./generic.ts";
 import { installSilentAbortRecovery } from "./cancellation.ts";
+import { installCompactionRenderer } from "./compaction.ts";
 import { registerWebMessageRenderers } from "./web.ts";
 
 type AnyDefinition = ToolDefinition<any, any, any>;
@@ -56,11 +57,13 @@ function registerRenderedTool(
   pi: ExtensionAPI,
   factory: DefinitionFactory,
   renderers: RendererOverride,
+  exposure: AnyDefinition["exposure"] = "direct",
 ): void {
   const initial = getDefinition(factory, process.cwd());
   pi.registerTool({
     ...initial,
     ...renderers,
+    exposure,
     // Permission policy resolves and pins paths in a pre-execution hook.
     // Sequential batches prevent another tool call from retargeting them.
     executionMode: "sequential",
@@ -79,15 +82,18 @@ function registerRenderedTool(
 
 /** Register Codex-style presentation without changing built-in behavior. */
 export function registerCodexRenderers(pi: ExtensionAPI): void {
-  installGenericToolRenderer();
+  installGenericToolRenderer(pi);
   installSilentAbortRecovery(pi);
+  installCompactionRenderer();
   registerWebMessageRenderers(pi);
   registerRenderedTool(pi, createReadToolDefinition, readRenderers);
   registerRenderedTool(pi, createGrepToolDefinition, grepRenderers);
   registerRenderedTool(pi, createFindToolDefinition, findRenderers);
   registerRenderedTool(pi, createLsToolDefinition, lsRenderers);
-  registerRenderedTool(pi, createWriteToolDefinition, writeRenderers);
-  registerRenderedTool(pi, createEditToolDefinition, editRenderers);
+  // Preserve historical rendering without exposing alternate file mutations.
+  // apply_patch owns file creation and editing going forward.
+  registerRenderedTool(pi, createWriteToolDefinition, writeRenderers, "hidden");
+  registerRenderedTool(pi, createEditToolDefinition, editRenderers, "hidden");
 
   // Bash is intentionally not registered here. The sibling sandbox extension
   // owns bash execution and composes codexBashRenderers into that definition.
@@ -110,6 +116,10 @@ export {
   SilentAbortRecovery,
   installSilentAbortRecovery,
 } from "./cancellation.ts";
+export {
+  createCompactionTranscriptComponent,
+  installCompactionRenderer,
+} from "./compaction.ts";
 export {
   createWebToolRenderers,
   registerWebMessageRenderers,

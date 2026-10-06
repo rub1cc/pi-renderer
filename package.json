@@ -1,0 +1,49 @@
+{
+  "name": "@rub1cc/pi-renderer",
+  "version": "1.0.0",
+  "description": "Compact Codex-style tool rendering for Pi",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./renderers": "./renderers.ts"
+  },
+  "files": [
+    "index.ts",
+    "cancellation.ts",
+    "compaction.ts",
+    "components.ts",
+    "generic.ts",
+    "renderers.ts",
+    "web.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "echo 'TypeScript source is loaded directly by Pi'",
+    "check": "bun test",
+    "test": "bun test"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "renderer",
+    "codex"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "@rub1cc/pi-apply-patch": "1.0.0"
+  },
+  "bundledDependencies": [
+    "@rub1cc/pi-apply-patch"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}

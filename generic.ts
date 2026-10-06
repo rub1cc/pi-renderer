@@ -1,10 +1,9 @@
 import type {
   AgentToolResult,
+  ExtensionAPI,
   Theme,
-  ToolDefinition,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { InteractiveMode } from "@earendil-works/pi-coding-agent";
 import {
   type CodexRenderState,
   type RendererContext,
@@ -16,9 +15,6 @@ import {
   sanitizeTerminalText,
 } from "./components.ts";
 import { createWebToolRenderers } from "./web.ts";
-
-type AnyDefinition = ToolDefinition<any, any, any>;
-type GetToolDefinition = (toolName: string) => AnyDefinition | undefined;
 
 interface AgentToolDetails {
   description?: string;
@@ -47,17 +43,6 @@ interface AgentToolDetails {
 interface AgentCodexRenderState extends CodexRenderState {
   details?: AgentToolDetails;
   fallbackResult?: boolean;
-}
-
-const PATCH_KEY = Symbol.for("pi.codex-tool-renderer.generic-fallback");
-const wrappedDefinitions = new WeakMap<object, AnyDefinition>();
-
-interface PatchedInteractiveModePrototype {
-  getRegisteredToolDefinition: GetToolDefinition;
-  [PATCH_KEY]?: {
-    original: GetToolDefinition;
-    wrapper: GetToolDefinition;
-  };
 }
 
 function compactArguments(args: unknown): string {
@@ -280,80 +265,19 @@ export function createAgentToolRenderers() {
   };
 }
 
-function addGenericRenderers(
-  toolName: string,
-  definition: AnyDefinition | undefined,
-): AnyDefinition | undefined {
-  if (!definition) {
-    return definition;
-  }
+/** Register presentation only, including fallback for not-yet-registered tools. */
+export function installGenericToolRenderer(pi: ExtensionAPI): void {
+  pi.registerToolRenderer((toolName, next) => {
+    const webRenderers = createWebToolRenderers(toolName);
+    if (webRenderers) return webRenderers;
 
-  const webRenderers = createWebToolRenderers(toolName, definition.label);
-  if (webRenderers) {
-    const cached = wrappedDefinitions.get(definition);
-    if (cached) return cached;
-    const wrapped = { ...definition, ...webRenderers };
-    wrappedDefinitions.set(definition, wrapped);
-    return wrapped;
-  }
+    // Adapt the full-width Agent card explicitly. All other rich renderers,
+    // including apply_patch and SubagentWorkflow, retain their presentation.
+    if (toolName === "Agent") return createAgentToolRenderers();
 
-  // pi-subagents intentionally ships a Claude-style Agent card. It is the one
-  // known custom renderer that conflicts with this extension's transcript
-  // layout, so adapt it explicitly while leaving every other rich renderer
-  // (notably apply_patch and SubagentWorkflow) intact.
-  if (toolName === "Agent") {
-    const cached = wrappedDefinitions.get(definition);
-    if (cached) return cached;
-    const wrapped = { ...definition, ...createAgentToolRenderers() };
-    wrappedDefinitions.set(definition, wrapped);
-    return wrapped;
-  }
-
-  if (definition.renderCall || definition.renderResult) return definition;
-
-  const cached = wrappedDefinitions.get(definition);
-  if (cached) return cached;
-
-  const wrapped = {
-    ...definition,
-    ...createGenericToolRenderers(toolName),
-  };
-  wrappedDefinitions.set(definition, wrapped);
-  return wrapped;
-}
-
-/**
- * Install a presentation-only fallback at Pi's final definition lookup.
- *
- * Pi currently exposes no renderer-only registration API. Re-registering a
- * third-party tool would replace its execute function, so the safe integration
- * point is InteractiveMode's definition lookup after every extension has
- * registered its own behavior. Existing renderers are returned unchanged.
- */
-export function installGenericToolRenderer(): void {
-  const prototype = InteractiveMode.prototype as unknown as PatchedInteractiveModePrototype;
-  let patch = prototype[PATCH_KEY];
-  if (!patch) {
-    patch = {
-      original: prototype.getRegisteredToolDefinition,
-      wrapper: prototype.getRegisteredToolDefinition,
-    };
-    Object.defineProperty(prototype, PATCH_KEY, {
-      configurable: false,
-      enumerable: false,
-      value: patch,
-      writable: false,
-    });
-  }
-
-  const original = patch.original;
-  const wrapper: GetToolDefinition = function (
-    this: unknown,
-    toolName: string,
-  ): AnyDefinition | undefined {
-    return addGenericRenderers(toolName, original.call(this, toolName));
-  };
-  patch.wrapper = wrapper;
-  prototype.getRegisteredToolDefinition = wrapper;
+    const existing = next();
+    if (existing?.renderCall || existing?.renderResult) return existing;
+    return createGenericToolRenderers(toolName);
+  });
 }
 

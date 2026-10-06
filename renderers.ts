@@ -23,6 +23,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
+  createDiffComponent,
+  normalizeApplyPatchDetails,
+} from "@rub1cc/pi-apply-patch/renderer";
+import {
   type CodexRenderState,
   type RendererContext,
   activityStatus,
@@ -489,8 +493,15 @@ export const editRenderers = {
     context: RendererContext<EditCodexRenderState, EditToolInput>,
   ) {
     const diff = context.isError ? "" : asString(result.details?.diff);
+    const details = diff ? normalizeApplyPatchDetails({
+      changes: [{
+        type: "update",
+        path: displayPath(editPath(context.args), context.cwd),
+        diff: sanitizeTerminalText(diff),
+      }],
+    }) : undefined;
     if (diff) {
-      context.state.stats = countDiffLines(diff);
+      context.state.stats = details?.stats ?? countDiffLines(diff);
       renderEditHeader(
         context.args,
         theme,
@@ -498,6 +509,16 @@ export const editRenderers = {
         context.state.callComponent,
       );
     }
+    if (details) {
+      return createDiffComponent({
+        details,
+        expanded: options.expanded,
+        showHeader: false,
+        theme,
+      }, context.lastComponent);
+    }
+
+    // Preserve readable output for errors or an unrecognized persisted format.
     const text = context.isError
       ? getTextOutput(result as AnyResult)
       : diff
@@ -507,7 +528,8 @@ export const editRenderers = {
       text,
       expanded: options.expanded,
       direction: "head",
-      previewRows: 3,
+      previewRows: context.isError ? 3 : 24,
+      showCollapseHint: !context.isError,
       tone: context.isError ? "error" : "prestyled",
       theme,
     });
