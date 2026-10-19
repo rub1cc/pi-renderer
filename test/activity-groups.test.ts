@@ -7,6 +7,7 @@ import { activityGroupKind, activityFailed } from "../group-model.ts";
 import { installReadGrouping, ReadGroupingController } from "../read-groups.ts";
 import { readRenderers } from "../renderers.ts";
 import { createWebToolRenderers } from "../web.ts";
+import { installReadGroupingForTest } from "./read-grouping-runtime.ts";
 
 beforeAll(async () => { await initTheme("light", false); });
 
@@ -41,6 +42,7 @@ function setup(hidden = true, attach = true) {
   };
   const controller = new ReadGroupingController(host);
   if (attach) expect(controller.attach()).toBe(true);
+  else installReadGroupingForTest(host);
   return { host, controller };
 }
 function tool(host: any, input: ReturnType<typeof call>, completed = true, result?: any) {
@@ -187,7 +189,7 @@ describe("hidden task tools", () => {
     const saved = JSON.stringify(items);
     const host = setup(true, false).host;
     for (let i = 0; i < 2; i++) {
-      installReadGrouping({ on() { return () => {}; } } as any);
+      installReadGroupingForTest(host);
       host.chatContainer.clear();
       (InteractiveMode.prototype as any).renderSessionItems.call(host, items);
       expect(text(host)).toContain("GetTask(#1)");
@@ -515,7 +517,7 @@ describe("routine activity groups", () => {
     }
     expect(rows(live)).toEqual(rows(restored));
     expect(groups(live)).toHaveLength(1);
-    installReadGrouping({ on() { return () => {}; } } as any);
+    installReadGroupingForTest(restored);
     restored.chatContainer.clear(); renderItems.call(restored, items);
     expect(text(restored)).toContain("Web research · 2 fetches");
     expect(JSON.stringify(items)).toBe(saved);

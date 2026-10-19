@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import {
   AssistantMessageComponent,
+  createExtensionRuntime,
+  ExtensionRunner,
   getMarkdownTheme,
   initTheme,
   InteractiveMode,
@@ -22,6 +24,7 @@ import {
 import { installReadGrouping, ReadGroupingController } from "../read-groups.ts";
 import { codexBashRenderers, findRenderers, grepRenderers, lsRenderers, readRenderers } from "../renderers.ts";
 import { decorateAssistantReply } from "../assistant-replies.ts";
+import { installReadGroupingForTest } from "./read-grouping-runtime.ts";
 import { createDiffComponent, normalizeApplyPatchDetails } from "@rub1cc/pi-apply-patch/renderer";
 
 beforeAll(async () => { await initTheme("light", false); });
@@ -43,7 +46,7 @@ function assistant(content: any[]) {
   return { role: "assistant", content, stopReason: "toolUse", timestamp: 1 };
 }
 
-function mode() {
+function mode(bind = true) {
   const value: any = {
     isInitialized: true,
     chatContainer: new Container(),
@@ -79,6 +82,7 @@ function mode() {
         : new Text(message.role, 0, 0));
     },
   };
+  if (bind) installReadGroupingForTest(value);
   return value;
 }
 
@@ -764,7 +768,7 @@ describe("continuous live activity groups", () => {
     restored.hideThinkingBlock = true;
     (InteractiveMode.prototype as any).renderSessionItems.call(restored, items);
     expect(rows(restored)).toEqual(complete);
-    installReadGrouping({ on() { return () => {}; } } as any);
+    installReadGroupingForTest(restored);
     restored.chatContainer.clear();
     (InteractiveMode.prototype as any).renderSessionItems.call(restored, items);
     expect(rows(restored)).toEqual(complete);
@@ -1460,8 +1464,8 @@ describe("exploration group presentation", () => {
 });
 
 describe("host read grouping integration", () => {
-  function install() {
-    installReadGrouping({ on() { return () => {}; } } as any);
+  function install(host?: any) {
+    return installReadGroupingForTest(host);
   }
 
   test("singleton shells and mixed read/shell rounds match live, replay and reload", async () => {
@@ -1498,7 +1502,7 @@ describe("host read grouping integration", () => {
       expect(rows(live)).toEqual(rows(restored));
       expect(rows(live)).toEqual(["", `  ${summary}`]);
       expect(headers(live)).toHaveLength(1);
-      install();
+      install(restored);
       restored.chatContainer.clear();
       renderItems.call(restored, items);
       expect(rows(restored)).toEqual(rows(live));
@@ -1519,7 +1523,7 @@ describe("host read grouping integration", () => {
       (child: any) => child instanceof ToolExecutionComponent,
     );
     const wrappedRender = originalMember.render;
-    install();
+    install(host);
     expect((InteractiveMode.prototype as any).renderSessionItems).toBe(renderItems);
     host.chatContainer.clear();
     renderItems.call(host, items);
@@ -1529,7 +1533,7 @@ describe("host read grouping integration", () => {
 
     // A fail-open controller can also recover through a subsequent reload.
     headers(host)[0].controller.detach();
-    install();
+    install(host);
     host.chatContainer.clear();
     renderItems.call(host, items);
     expect(headers(host)).toHaveLength(1);
@@ -1652,7 +1656,7 @@ describe("host read grouping integration", () => {
     expect(rows(host).join("\n")).toContain("Reading 2 files");
     const oldAssistant = host.chatContainer.children.find((child: any) => child instanceof AssistantMessageComponent);
     const oldUpdate = oldAssistant.updateContent;
-    install();
+    install(host);
     host.chatContainer.clear();
     renderItems.call(host, items);
     expect(oldAssistant.updateContent).not.toBe(oldUpdate);
@@ -1732,7 +1736,7 @@ describe("host read grouping integration", () => {
     setHideThinking(live, true);
     expect(rows(live).join("\n")).toContain(expected);
 
-    install();
+    install(restored);
     restored.chatContainer.clear();
     renderItems.call(restored, items);
     expect(rows(restored).join("\n")).toContain(expected);
@@ -1775,5 +1779,148 @@ describe("host read grouping integration", () => {
     expect(rows(host)[1]).toStartWith("• 1 failed · Searched for 1 pattern, read 1 file");
     expect(host.pendingTools.size).toBe(0);
     expect(JSON.stringify(message)).toBe(saved);
+  });
+});
+
+describe("read grouping session ownership", () => {
+  const reply = () => assistant([{ type: "text", text: "Session reply." }]);
+  const renderItems = (host: any, items: any[]) =>
+    (InteractiveMode.prototype as any).renderSessionItems.call(host, items);
+  const coloredTheme = (color: number) => ({
+    fg: (_token: string, text: string) => `\u001b[${color}m${text}\u001b[39m`,
+  }) as Theme;
+
+  test("rendering after real context invalidation never reads the stale context", () => {
+    const host = mode(false);
+    const runtime = installReadGroupingForTest();
+    const runner = new ExtensionRunner([], createExtensionRuntime(), "/repo", host.sessionManager, {} as any);
+    runner.setUIContext(undefined, "tui");
+    const context = runner.createContext();
+    runtime.start(context);
+    renderItems(host, [reply()]);
+    expect(rows(host).join("\n")).toContain("⏺ Session reply.");
+    runner.invalidate();
+    expect(() => context.ui).toThrow("extension ctx is stale");
+    host.chatContainer.invalidate();
+    expect(rows(host).join("\n")).toContain("⏺ Session reply.");
+    runtime.shutdown("reload");
+    expect(rows(host).join("\n")).toContain("Session reply.");
+    expect(rows(host).join("\n")).not.toContain("⏺");
+  });
+
+  test("SDK loading, headless starts and child disposal cannot replace a parent controller or theme", () => {
+    const host = mode(false);
+    const parent = installReadGroupingForTest();
+    parent.start({ mode: "tui", sessionManager: host.sessionManager, ui: { theme: coloredTheme(31) } });
+    renderItems(host, [assistant([call("a"), call("b")]), reply()]);
+    const header = headers(host)[0];
+    header.setExpanded(true);
+    for (const childMode of ["print", "json", "rpc"]) {
+      const child = installReadGroupingForTest();
+      const runner = new ExtensionRunner([], createExtensionRuntime(), "/repo", {} as any, {} as any);
+      runner.setUIContext(undefined, childMode as any);
+      child.start(runner.createContext());
+      child.shutdown();
+      runner.invalidate();
+      renderItems(host, []);
+      expect(headers(host)[0]).toBe(header);
+      expect(header.expanded).toBe(true);
+      expect(host.chatContainer.render(80).join("\n")).toContain("\u001b[31m⏺\u001b[39m");
+    }
+  });
+
+  test("headless sessions sharing a session manager still cannot claim its UI", () => {
+    const host = mode(false);
+    const parent = installReadGroupingForTest(host);
+    renderItems(host, [reply()]);
+    const render = host.chatContainer.render;
+    const child = installReadGroupingForTest();
+    child.start({
+      mode: "print",
+      get sessionManager() { throw new Error("headless session manager must not be read"); },
+      get ui() { throw new Error("headless UI must not be read"); },
+    });
+    child.shutdown();
+    expect(host.chatContainer.render).toBe(render);
+    expect(rows(host).join("\n")).toContain("⏺ Session reply.");
+    parent.shutdown();
+  });
+
+  test("separate TUI sessions keep independent themes and shutdown ownership", () => {
+    const first = mode(false);
+    const second = mode(false);
+    const one = installReadGroupingForTest();
+    const two = installReadGroupingForTest();
+    let theme = coloredTheme(31);
+    one.start({ mode: "tui", sessionManager: first.sessionManager, ui: { get theme() { return theme; } } });
+    two.start({ mode: "tui", sessionManager: second.sessionManager, ui: { theme: coloredTheme(34) } });
+    renderItems(first, [reply()]);
+    renderItems(second, [reply()]);
+    expect(first.chatContainer.render(80).join("\n")).toContain("\u001b[31m⏺\u001b[39m");
+    expect(second.chatContainer.render(80).join("\n")).toContain("\u001b[34m⏺\u001b[39m");
+    theme = coloredTheme(32);
+    first.chatContainer.invalidate();
+    expect(first.chatContainer.render(80).join("\n")).toContain("\u001b[32m⏺\u001b[39m");
+    one.shutdown();
+    expect(rows(first).join("\n")).not.toContain("⏺");
+    expect(second.chatContainer.render(80).join("\n")).toContain("\u001b[34m⏺\u001b[39m");
+  });
+
+  test("reload safely renders the unbound gap and restores replayed history at session_start", () => {
+    const host = mode(false);
+    host.hideThinkingBlock = true;
+    const items = [assistant([
+      { type: "thinking", thinking: "Private reasoning" }, call("a"), call("b"),
+    ]), reply()];
+    const old = installReadGroupingForTest(host);
+    renderItems(host, items);
+    const oldHeader = headers(host)[0];
+    old.shutdown("reload");
+    expect(headers(host)).toHaveLength(0);
+    host.chatContainer.clear();
+    renderItems(host, items);
+    expect(headers(host)).toHaveLength(0);
+    expect(rows(host).join("\n")).not.toContain("⏺");
+    const next = installReadGroupingForTest(host);
+    expect(headers(host)).toHaveLength(1);
+    expect(headers(host)[0].controller).not.toBe(oldHeader.controller);
+    expect(rows(host).join("\n")).toContain("Reading 2 files");
+    expect(rows(host).join("\n")).toContain("⏺ Session reply.");
+    expect(rows(host).join("\n")).not.toContain("Private reasoning");
+    old.shutdown();
+    expect(headers(host)).toHaveLength(1);
+    next.shutdown();
+    next.shutdown();
+    expect(headers(host)).toHaveLength(0);
+    expect(rows(host).join("\n")).not.toContain("⏺");
+  });
+
+  test("a stale runtime cannot detach a newer owner of the same session", () => {
+    const host = mode(false);
+    const old = installReadGroupingForTest(host);
+    renderItems(host, [assistant([call("a"), call("b")]), reply()]);
+    installReadGroupingForTest(host);
+    const header = headers(host)[0];
+    old.shutdown();
+    renderItems(host, []);
+    expect(headers(host)[0]).toBe(header);
+    expect(rows(host).join("\n")).toContain("⏺ Session reply.");
+  });
+
+  test("session replacement releases old wrappers before claiming the new session", () => {
+    const host = mode(false);
+    const runtime = installReadGroupingForTest(host);
+    renderItems(host, [assistant([call("a")]), reply()]);
+    const oldAssistant = host.chatContainer.children.find((child: any) => child instanceof AssistantMessageComponent);
+    const wrapped = oldAssistant.updateContent;
+    runtime.shutdown("new");
+    expect(oldAssistant.updateContent).not.toBe(wrapped);
+    host.sessionManager = { getCwd: () => "/repo", getEntries: () => [] };
+    host.chatContainer.clear();
+    renderItems(host, [assistant([call("b")]), reply()]);
+    runtime.start({ mode: "tui", sessionManager: host.sessionManager, ui: { theme: undefined } });
+    expect(headers(host)).toHaveLength(1);
+    expect(headers(host)[0].members[0].toolCallId).toBe("b");
+    expect(rows(host).join("\n")).toContain("⏺ Session reply.");
   });
 });

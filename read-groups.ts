@@ -32,9 +32,9 @@ import {
 import { decorateAssistantReply, type AssistantReplyDecoration } from "./assistant-replies.ts";
 
 export const READ_GROUP = Symbol.for("pi.codex-tool-renderer.read-group");
-const PATCH = Symbol.for("pi.codex-tool-renderer.read-groups.patch");
-const CONTROLLER = Symbol.for("pi.codex-tool-renderer.read-groups.controller");
-const GENERATION = Symbol.for("pi.codex-tool-renderer.read-groups.generation");
+const PATCH = Symbol.for("pi.codex-tool-renderer.read-groups.patch.v2");
+const LEGACY_PATCH = Symbol.for("pi.codex-tool-renderer.read-groups.patch");
+const LEGACY_CONTROLLER = Symbol.for("pi.codex-tool-renderer.read-groups.controller");
 
 type Method = (this: any, ...args: any[]) => any;
 interface Segment { length: number; startsMessage: boolean; endsMessage: boolean }
@@ -657,18 +657,49 @@ export class ReadGroupingController {
   }
 }
 
-interface PatchState {
+interface SessionOwner {
+  sessionManager: object;
+  controllers: Map<any, ReadGroupingController>;
   factory: (mode: any) => ReadGroupingController;
-  getTheme?: () => Theme | undefined;
-  generation: number;
+}
+
+interface PatchState {
+  owners: Map<object, SessionOwner>;
+  modes: WeakMap<object, WeakRef<any>>;
+}
+
+function attachController(owner: SessionOwner, mode: any): ReadGroupingController | undefined {
+  let controller = owner.controllers.get(mode);
+  try {
+    if (!controller) {
+      controller = owner.factory(mode);
+      owner.controllers.set(mode, controller);
+      // Startup and reload can replay history before session_start binds the UI.
+      controller.recordItems((mode.chatContainer?.children ?? []).map((child: any) => child.lastMessage));
+    }
+    if (controller.attach()) return controller;
+  } catch { controller?.detach(); }
 }
 
 /** Private, version-sensitive hooks: never patch Container.prototype. */
 export function installReadGrouping(pi: ExtensionAPI): void {
   const prototype = InteractiveMode.prototype as any;
+  const legacy = prototype[LEGACY_PATCH];
+  if (legacy && !legacy.retired) {
+    // /reload retains old prototype wrappers. Make them inert before replacing
+    // their controllers; even a redraw during reload must not read the old ctx.
+    legacy.getTheme = undefined;
+    legacy.factory = (mode: any) => {
+      const controller = new ReadGroupingController(mode);
+      controller.detach();
+      return controller;
+    };
+    legacy.generation++;
+    legacy.retired = true;
+  }
   let state = prototype[PATCH] as PatchState | undefined;
   if (!state) {
-    state = { factory: undefined!, generation: 0 };
+    state = { owners: new Map(), modes: new WeakMap() };
     Object.defineProperty(prototype, PATCH, { value: state });
     const shared = state;
     for (const name of ["handleEvent", "renderSessionItems"]) {
@@ -677,15 +708,14 @@ export function installReadGrouping(pi: ExtensionAPI): void {
       prototype[name] = function (...args: any[]) {
         let controller: ReadGroupingController | undefined;
         try {
-          // /reload keeps the mode but replaces the extension runtime. Restore
-          // old visibility wrappers before the new controller rebuilds groups.
-          if (!this[CONTROLLER] || this[GENERATION] !== shared.generation) {
-            this[CONTROLLER]?.detach();
-            this[CONTROLLER] = shared.factory(this);
-            this[GENERATION] = shared.generation;
+          this[LEGACY_CONTROLLER]?.detach();
+          const sessionManager = this.sessionManager;
+          if (sessionManager && typeof sessionManager === "object") {
+            if (shared.modes.get(sessionManager)?.deref() !== this) shared.modes.set(sessionManager, new WeakRef(this));
+            const owner = shared.owners.get(sessionManager);
+            if (owner) controller = attachController(owner, this);
           }
-          controller = this[CONTROLLER] as ReadGroupingController;
-          if (controller.attach()) {
+          if (controller) {
             if (name === "renderSessionItems") controller.recordItems(args[0]);
             else {
               controller.recordEvent(args[0]);
@@ -700,7 +730,31 @@ export function installReadGrouping(pi: ExtensionAPI): void {
     }
   }
   const shared = state;
-  state.generation = (state.generation ?? 0) + 1;
-  state.factory = (mode) => new ReadGroupingController(mode, () => shared.getTheme?.());
-  pi.on("session_start", (_event, context) => { shared.getTheme = () => context.ui.theme; });
+  let owner: SessionOwner | undefined;
+  const release = (previous: SessionOwner) => {
+    if (shared.owners.get(previous.sessionManager) === previous) shared.owners.delete(previous.sessionManager);
+    for (const controller of previous.controllers.values()) controller.detach();
+    previous.controllers.clear();
+  };
+  pi.on("session_start", (_event, context) => {
+    if (context.mode !== "tui") return;
+    if (owner) release(owner);
+    const sessionManager = context.sessionManager;
+    const previous = shared.owners.get(sessionManager);
+    if (previous) release(previous);
+    // Keep the live UI theme getter, not a context invalidated by replacement.
+    const ui = context.ui;
+    owner = {
+      sessionManager,
+      controllers: new Map(),
+      factory: mode => new ReadGroupingController(mode, () => ui.theme),
+    };
+    shared.owners.set(sessionManager, owner);
+    const mode = shared.modes.get(sessionManager)?.deref();
+    if (mode) attachController(owner, mode);
+  });
+  pi.on("session_shutdown", () => {
+    if (owner) release(owner);
+    owner = undefined;
+  });
 }
