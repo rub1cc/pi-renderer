@@ -22,6 +22,7 @@ import { installGenericToolRenderer } from "./generic.ts";
 import { installSilentAbortRecovery } from "./cancellation.ts";
 import { installCompactionRenderer } from "./compaction.ts";
 import { installReadGrouping } from "./read-groups.ts";
+import { installWorkingIndicator } from "./working-indicator.ts";
 import { registerWebMessageRenderers } from "./web.ts";
 
 type AnyDefinition = ToolDefinition<any, any, any>;
@@ -87,6 +88,7 @@ export function registerCodexRenderers(pi: ExtensionAPI): void {
   installSilentAbortRecovery(pi);
   installCompactionRenderer();
   installReadGrouping(pi);
+  installWorkingIndicator(pi);
   registerWebMessageRenderers(pi);
   registerRenderedTool(pi, createReadToolDefinition, readRenderers);
   registerRenderedTool(pi, createGrepToolDefinition, grepRenderers);

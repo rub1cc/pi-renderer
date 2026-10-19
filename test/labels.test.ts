@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { renderActivityHeader } from "../components.ts";
+import { activityStatus, renderActivityHeader } from "../components.ts";
 import { TOOL_LABELS, toolArgumentSummary, toolLabel } from "../labels.ts";
 import { createAgentToolRenderers, createGenericToolRenderers } from "../generic.ts";
 import { createWebToolRenderers } from "../web.ts";
@@ -75,7 +75,8 @@ describe("tool display aliases", () => {
   });
 
   test("keeps small dots, aliased labels and explicit running, failed and background states", () => {
-    for (const [status, suffix] of [["active", "running…"], ["error", "Failed"], ["success", ""]] as const) {
+    for (const [status, suffix] of [["preparing", "preparing…"], ["queued", "waiting…"],
+      ["active", "running…"], ["error", "Failed"], ["success", ""]] as const) {
       const header = renderActivityHeader({}, undefined, { status, label: "Read", subject: "file.ts" }, theme);
       const text = header.render(80).map(stripTerminalSequences).join("\n");
       expect(text).toStartWith("• Read(file.ts)");
@@ -92,6 +93,23 @@ describe("tool display aliases", () => {
     adapter.renderResult({ content: [], details: { status: "background", agentId: "agent-1" } },
       { expanded: false, isPartial: false }, theme, ctx);
     expect(header.render(100).map(stripTerminalSequences).join("\n")).toContain('Agent(Explore, "Find files") · background');
+  });
+
+  test("partial arguments are preparing, not running; complete calls can wait before execution", () => {
+    const args = {};
+    for (const [flags, expected, suffix] of [
+      [{ isPartial: true, executionStarted: false, argsComplete: false }, "preparing", "preparing…"],
+      [{ isPartial: true, executionStarted: false, argsComplete: true }, "queued", "waiting…"],
+      [{ isPartial: true, executionStarted: true, argsComplete: true }, "active", "running…"],
+      [{ isPartial: false, executionStarted: true, argsComplete: true }, "success", ""],
+    ] as const) {
+      const ctx = context(args, flags);
+      expect(activityStatus(ctx)).toBe(expected);
+      const header = createGenericToolRenderers("unknown_tool").renderCall(args, theme, ctx);
+      const text = header.render(100).map(stripTerminalSequences).join("\n");
+      if (suffix) expect(text).toContain(suffix);
+      if (!flags.executionStarted) expect(text).not.toContain("running");
+    }
   });
 
   test("web content stays visibly distinct from file reads and reports tool-level failures", () => {

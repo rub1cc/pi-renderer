@@ -16,11 +16,13 @@
     "cancellation.ts",
     "compaction.ts",
     "components.ts",
+    "assistant-replies.ts",
     "labels.ts",
     "generic.ts",
     "group-model.ts",
     "renderers.ts",
     "read-groups.ts",
+    "working-indicator.ts",
     "web.ts",
     "README.md"
   ],

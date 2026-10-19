@@ -14,7 +14,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 
-export type ActivityStatus = "active" | "success" | "error";
+export type ActivityStatus = "preparing" | "queued" | "active" | "success" | "error";
 export const ACTIVITY_MARKER = "•";
 
 export function activityMarker(status: ActivityStatus, theme?: Theme): string {
@@ -51,10 +51,12 @@ export interface RendererContext<TState, TArgs> {
 }
 
 export function activityStatus(
-  context: Pick<RendererContext<unknown, unknown>, "isError" | "isPartial">,
+  context: Pick<RendererContext<unknown, unknown>, "isError" | "isPartial" | "executionStarted" | "argsComplete">,
 ): ActivityStatus {
   if (context.isError) return "error";
-  return context.isPartial ? "active" : "success";
+  if (!context.isPartial) return "success";
+  if (!context.executionStarted) return context.argsComplete ? "queued" : "preparing";
+  return "active";
 }
 
 export function asString(value: unknown): string {
@@ -195,8 +197,10 @@ export function renderActivityHeader<TState extends CodexRenderState>(
       : state.callComponent ?? new Text("", 0, 0);
   state.callComponent = component;
 
-  const color = options.status === "error" ? "error" : options.status === "active" ? "accent" : "toolTitle";
-  const status = options.statusText ?? (options.status === "error" ? "Failed" : options.status === "active" ? "running…" : "");
+  const color = options.status === "error" ? "error" : options.status === "success" ? "toolTitle" : "accent";
+  const status = options.statusText ?? ({
+    error: "Failed", active: "running…", preparing: "preparing…", queued: "waiting…", success: "",
+  }[options.status]);
   const suffix = options.suffix ? ` ${options.suffix}` : "";
 
   component.setText(

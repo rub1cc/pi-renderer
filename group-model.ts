@@ -4,6 +4,15 @@ import { webFailureText, webResultFailed } from "./web.ts";
 
 export type ActivityGroupKind = "files" | "web" | "tasks" | "status" | "browser";
 export const FILE_EXPLORATION_TOOLS = new Set(["read", "grep", "find", "ls"]);
+export const TASK_TOOLS = new Set(["TaskCreate", "TaskList", "TaskGet", "TaskUpdate", "TaskExecute", "TaskOutput", "TaskStop"]);
+
+/** Calls whose category is known before their arguments finish streaming. */
+export function preparingActivityKind(name: string): ActivityGroupKind | undefined {
+  if (FILE_EXPLORATION_TOOLS.has(name) || name === "bash") return "files";
+  if (["web_search", "source_check", "fetch_content", "get_search_content"].includes(name)) return "web";
+  if (["TaskCreate", "TaskList", "TaskGet"].includes(name)) return "tasks";
+  if (["get_subagent_result", "TaskOutput"].includes(name)) return "status";
+}
 
 function object(value: unknown): Record<string, any> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -50,6 +59,8 @@ export function activityGroupKind(name: string, value: unknown): ActivityGroupKi
     if (args.path !== undefined && typeof args.path !== "string") return;
     return name === "ls" || typeof args.pattern === "string" ? "files" : undefined;
   }
+  // Shell calls share the exploration receipt without interpreting the command.
+  if (name === "bash") return nonempty(args.command) ? "files" : undefined;
   if (name === "web_search") return hasStrings(args, "query", "queries") ? "web" : undefined;
   if (name === "source_check") return nonempty(args.claim) ? "web" : undefined;
   if (name === "fetch_content") return hasStrings(args, "url", "urls") ? "web" : undefined;
@@ -116,7 +127,10 @@ export function activityFailed(member: any): boolean {
   if (result.isError === true || webResultFailed(member.toolName, result, member.isPartial === true)) return true;
   const details = object(result.details);
   if (details?.error || details?.isError === true || details?.resultCategory === "failure" || details?.success === false) return true;
-  if (["failed", "error", "aborted", "stopped"].includes(details?.status)) return true;
+  if (["failed", "error", "aborted", "stopped"].includes(details?.status)) {
+    // A stop request succeeds by entering the stopped state.
+    return !(member.toolName === "TaskStop" && details.status === "stopped");
+  }
   // These tools also return background failures as successful text retrievals.
   if (member.toolName !== "TaskOutput" && member.toolName !== "get_subagent_result") return false;
   const text = result.content?.find((part: any) => part?.type === "text")?.text?.slice(0, 512) ?? "";

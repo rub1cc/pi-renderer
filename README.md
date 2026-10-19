@@ -16,22 +16,35 @@ pi -e npm:@rub1cc/pi-renderer
 ```
 
 ```text
-• Read(src/auth.ts)
+⏺ I will inspect the authentication code and run its tests.
 
-• Bash(npm test) (1.4s)
-  ⎿ Tests: 12 passed
+  Searched for 1 pattern, read 1 file, ran 1 shell command
 
-• Grep(/refreshSession/ in src)
-  ⎿ src/auth.ts:42: return refreshSession(token)
-    … +4 lines (ctrl+o to expand)
+⏺ The tests pass. Here is what I found...
 ```
 
 ## Behavior
 
+- A temporary inline working row at the bottom of the scrolling transcript,
+  rather than in the editor border: `✽ Working (1m 15s)`. The symbol cycles
+  `✽ → ✻ → ✢ → ∙ → ✢ → ✻ → ✽` with a theme-aware text shimmer. Elapsed time
+  includes days, hours, minutes, and seconds as needed; it continues across tool
+  rounds and automatic recovery until the run settles. Retry and compaction
+  indicators keep their native placement. Nothing is added to saved messages.
+  Successful turns lasting at least 10 seconds leave a muted `✽ Worked for 1m 15s`
+  receipt until the next run or transcript change. Short, cancelled, and failed
+  turns leave no receipt; receipts are not reconstructed from saved history.
+  Set `PI_RENDERER_REDUCED_MOTION=1` for a static symbol and no shimmer.
+- One `⏺` marker per visible assistant prose message, including progress updates
+  and final replies. Paragraphs and wrapped continuation lines align with the
+  text. Thinking-only and tool-only messages do not get a marker; tool calls and
+  active or failed activity groups keep their small `•` dots. Successful group
+  receipts are muted and dot-free. This is terminal-only presentation:
+  model-facing content, saved messages, and non-TUI output are unchanged.
 - Transparent activity rows instead of full-width status cards.
 - Small `•` activity dots, aliased `Label(arguments)` tool headers, and `⎿` output gutters.
-  Active labels use the accent color with a muted `running…` suffix; failures
-  keep an explicit red `Failed` suffix. Completed labels stay stable.
+  Active labels distinguish `preparing…`, `waiting…`, and actual `running…`;
+  failures keep an explicit red `Failed` suffix. Completed labels stay stable.
 - Display-only aliases such as `Read`, `Grep`, `Glob`, `List`, `Bash`, `Patch`,
   `WebSearch`, `CheckSources`, `WebFetch`, and `WebContent`. Actual tool names,
   arguments, execution, and session records are unchanged.
@@ -53,45 +66,84 @@ pi -e npm:@rub1cc/pi-renderer
   empty aborted turn is removed and the submitted prompt returns to the editor.
   Aborts after tool execution remain visible in the transcript.
 - Tool execution payloads and completed-turn model content are unchanged.
+- `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`, `TaskExecute`, `TaskOutput`,
+  and `TaskStop` rows are hidden from interactive previews, summaries, and
+  expanded tool history. They do not replace the current activity preview or
+  split a group. Task failures and image artifacts remain visible, including
+  background failures reported by `TaskOutput` and details-only errors. Task
+  execution, saved records, approval dialogs, and task progress widgets are
+  unchanged. Replay and reload apply the same visibility rules.
 
 ### Exploration groups
 
-Consecutive `read`, `grep`, `find`, and `ls` calls collapse into a combined
-Claude Code-style summary:
+Consecutive `read`, `grep`, `find`, `ls`, and `bash` calls collapse into a combined
+Claude Code-style summary, including groups containing only one call:
 
 ```text
-• Searched for 1 pattern, read 2 files, listed 1 directory
+  Read 1 file
+  Ran 1 shell command
+  Searched for 1 pattern, read 2 files, listed 1 directory, ran 3 shell commands
 ```
 
 `grep` and `find` each count as a pattern search. Reads count distinct normalized
 file paths; listings count distinct normalized directory paths. Repeated file or
 directory paths count once, with the total number of calls shown separately.
-Unused categories are omitted. Pending groups use `Searching for`, `reading`,
-and `listing` with an ellipsis, then switch to past tense on completion.
-Single calls keep their normal individual renderer.
-
-Collapsed groups show the actual executing target beneath the summary:
+Shell calls count commands, without trying to infer file reads or other effects
+from their scripts. Unused categories are omitted. During live work, the group
+shows only the latest operation, not aggregate counters:
 
 ```text
-• Searching for 1 pattern, reading 2 files…
-  ⎿ Reading src/auth.ts
+  Reading package.json
+  ⎿ /path/to/package.json
 ```
 
-Queued calls and replayed pending calls do not get a live-target row. When tools
-run in parallel, the first running call in transcript order is shown with an
-additional-running count. The target follows execution changes and disappears
-on completion or when the group is expanded to reveal its individual calls.
+The next executing tool replaces that preview in place:
+
+```text
+  Running pwd
+  ⎿ /Users/raz/project
+```
+
+Reads show the file basename in the title and full normalized path in the
+gutter. Commands and other inspections show up to three visual rows of output;
+shell previews use the tail. Empty output shows `No output`. Output can update
+while executing, but completion does not change the title or replace the preview
+with a count or waiting label. The last useful preview stays while the next
+call's arguments stream. Before the first call has usable arguments, no empty
+tool placeholder is shown. Parallel calls select the most recently started
+operation, not whichever older operation finishes last.
+
+Only when assistant prose resumes does the preview become a muted count receipt:
+
+```text
+  Read 1 file, ran 1 shell command
+
+⏺ Here is what I found...
+```
+
+There are no artificial execution delays. A normal run ending without prose
+keeps the preview. Visible consequential actions, notices, reasoning, and
+interruptions still form boundaries; errors and diffs stay reviewable.
+Single calls follow the same lifecycle. Empty text placeholders and hidden
+thinking do not close a live preview. Expanding a group reveals original calls
+without a duplicate gutter preview. Replay shows historical count summaries,
+not invented live activity or waiting states.
 
 With `/settings` -> `Hide thinking` on, thinking blocks disappear entirely (no
 collapsed label or leftover spacing), and exploration calls can group across
 hidden thinking and assistant-message boundaries: `Read A` -> thinking ->
 `Read B` becomes `Read 2 files`.
 
-With `Hide thinking` off, reasoning remains visible and groups stop at thinking
-or a different assistant message. Text, non-exploration tools, user/custom
+With `Hide thinking` off, reasoning remains visible and groups stop at thinking.
+Tool-only assistant messages do not break a group under either setting.
+Text, non-routine tools, visible user/custom
 messages, interruption notices, and unknown transcript components always break
-groups. Bash commands (including `ls` or `cat` run through Bash), edits, and
-writes remain separate; shell commands are not classified for grouping.
+groups. Edits, `apply_patch`, writes, questions, and unknown actions remain
+separate. Shell commands (including `ls` or `cat` run through Bash) join the
+exploration group but count only as shell commands. Image reads collapse like
+text reads; expanding the group reveals the original read and its image when
+Pi's image display is enabled. Images returned by other tools remain outside
+groups so artifacts do not disappear into a count.
 Changing the existing setting updates displayed reasoning and grouping without
 changing saved messages or recreating tool components.
 
@@ -114,33 +166,32 @@ and session records are retained. HTML exports remain ungrouped. It uses guarded
 private transcript hooks tested against Pi 1.3.0; unknown host/component shapes
 fall back to normal per-call rendering.
 
-### Other activity groups
+### Other routine activity
 
-Consecutive related calls also collapse into separate category summaries:
+Other safe routine calls share the replace-in-place preview. Completed summaries
+retain their category-specific operation counts:
 
 ```text
-• Web research · 2 searches, 3 fetches, 5 content reads
-• Task activity · 1 creation, 3 updates
-• Status checks · 3 agent checks, 1 task check
-• Browser inspection · 2 snapshots, 1 read
+  Web research · 2 searches, 3 fetches, 5 content reads
+  Status checks · 3 agent checks
+  Browser inspection · 2 snapshots, 1 read
 ```
 
 - Web research includes `web_search`, `source_check`, `fetch_content`, and
   `get_search_content`. Counts describe tool operations, not query counts,
   URLs, unique targets, or claims of successful completion.
-- Task activity includes `TaskCreate`, `TaskUpdate`, `TaskList`, and `TaskGet`.
-  Task deletion, execution, and stopping remain standalone actions.
-- Status checks include `get_subagent_result` and `TaskOutput`.
+- Status checks include `get_subagent_result`. Task tool rows, including
+  `TaskOutput`, remain hidden unless they report a failure or contain an image.
 - Browser inspection uses a strict allowlist of native `snapshot`, supported
   `get`, and `is` commands. Clicks, typing, navigation, screenshots, batches,
   arbitrary code, unknown flags, and output writes remain standalone.
 
-Groups never combine categories or move calls across explanations, user/custom
-messages, interruptions, or consequential actions. Single calls keep their own
-headers. Hidden-thinking behavior and click/global expansion work like filesystem
-groups: expand to see the original aliased calls in order, then expand individual
-results as needed. A running group shows the actual executing call, not queued
-work. Failure counts and a bounded first error remain visible while collapsed,
+Groups can combine these safe categories, but never move calls across
+explanations, visible user/custom messages, interruptions, or consequential
+actions. Missing tool components still form boundaries. Single calls also receive
+category summaries. Hidden-thinking behavior and click/global expansion work
+like filesystem groups: expand to see the original aliased calls in order, then
+expand individual results as needed. Failure counts and a bounded first error remain visible while collapsed,
 including partial web failures and explicitly reported background-task failures.
 Returned web/browser images remain ungrouped so artifacts stay visible.
 
@@ -214,12 +265,16 @@ source. Before publishing, verify `npm pack --dry-run` includes the bundled
 ## Architecture
 
 - `components.ts` contains reusable activity and tree-preview components.
+- `assistant-replies.ts` adds a width-aware prose gutter while preserving native
+  Markdown, thinking click targets, terminal prompt zones, and graphics rows.
 - `labels.ts` defines display aliases and bounded argument summaries for task,
   workflow, question, MCP, and other known tool headers.
 - `group-model.ts` classifies safe activity categories and formats operation
   counts, live targets, and failure details without changing tool execution.
 - `compaction.ts` replaces Pi's compaction card presentation while preserving
   its native summary, shortcut, and click-to-expand behavior.
+- `working-indicator.ts` renders an animated, elapsed-time status at the
+  transcript tail using guarded Pi 1.3 status hooks and native disposal.
 - `renderers.ts` contains tool-specific presentation and exports the composable
   bash renderer.
 - `generic.ts` supplies presentation for renderer-less third-party tools
