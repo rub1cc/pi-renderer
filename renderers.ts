@@ -21,10 +21,11 @@ import {
   highlightCode,
   renderDiff,
 } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import { type Component, MouseRegion } from "@earendil-works/pi-tui";
 import {
   createDiffComponent,
   normalizeApplyPatchDetails,
+  type DiffComponent,
 } from "@rub1cc/pi-apply-patch/renderer";
 import {
   type CodexRenderState,
@@ -44,6 +45,7 @@ import {
   renderTreeOutput,
   sanitizeTerminalText,
 } from "./components.ts";
+import { toolLabel } from "./labels.ts";
 
 type AnyResult = AgentToolResult<unknown>;
 
@@ -71,6 +73,8 @@ export interface BashCodexRenderState extends CodexRenderState {
 
 interface EditCodexRenderState extends CodexRenderState {
   stats?: { added: number; removed: number };
+  diffComponent?: DiffComponent;
+  headerRegion?: MouseRegion;
 }
 
 function pathSubject(value: unknown, cwd: string, theme: Theme): string {
@@ -182,10 +186,9 @@ function renderBashHeader(
     lastComponent,
     {
       status: activityStatus(context),
-      activeVerb: "Running",
-      successVerb: "Ran",
-      errorVerb,
-      subject: theme.fg("toolOutput", formatCommandPreview(args.command)),
+      label: toolLabel("bash"),
+      statusText: context.isError ? errorVerb : undefined,
+      subject: theme.fg("accent", formatCommandPreview(args.command)),
       suffix,
     },
     theme,
@@ -249,8 +252,7 @@ export const readRenderers = {
       context.lastComponent,
       {
         status: activityStatus(context),
-        activeVerb: "Reading",
-        successVerb: "Read",
+        label: toolLabel("read"),
         subject: `${pathSubject(args.path, context.cwd, theme)}${lineRange(
           args,
           theme,
@@ -295,8 +297,7 @@ export const grepRenderers = {
       context.lastComponent,
       {
         status: activityStatus(context),
-        activeVerb: "Searching",
-        successVerb: "Searched",
+        label: toolLabel("grep"),
         subject: grepSubject(args, theme, context.cwd),
       },
       theme,
@@ -333,8 +334,7 @@ export const findRenderers = {
       context.lastComponent,
       {
         status: activityStatus(context),
-        activeVerb: "Searching",
-        successVerb: "Searched",
+        label: toolLabel("find"),
         subject: findSubject(args, theme, context.cwd),
       },
       theme,
@@ -371,8 +371,7 @@ export const lsRenderers = {
       context.lastComponent,
       {
         status: activityStatus(context),
-        activeVerb: "Listing",
-        successVerb: "Listed",
+        label: toolLabel("ls"),
         subject: pathSubject(args.path || ".", context.cwd, theme),
       },
       theme,
@@ -414,8 +413,7 @@ export const writeRenderers = {
       context.lastComponent,
       {
         status: activityStatus(context),
-        activeVerb: "Writing",
-        successVerb: "Wrote",
+        label: toolLabel("write"),
         subject: pathSubject(args.path, context.cwd, theme),
         suffix: lineText,
       },
@@ -466,8 +464,7 @@ function renderEditHeader(
     lastComponent,
     {
       status: activityStatus(context),
-      activeVerb: "Editing",
-      successVerb: "Edited",
+      label: toolLabel("edit"),
       subject: pathSubject(editPath(args), context.cwd, theme),
       suffix,
     },
@@ -483,7 +480,12 @@ export const editRenderers = {
     theme: Theme,
     context: RendererContext<EditCodexRenderState, EditToolInput>,
   ) {
-    return renderEditHeader(args, theme, context);
+    const header = renderEditHeader(args, theme, context);
+    return context.state.headerRegion ??= new MouseRegion(header, (event) => {
+      if (event.type !== "click" || event.button !== "left" || !context.state.diffComponent) return;
+      context.state.diffComponent.toggleExpanded();
+      return { handled: true };
+    });
   },
 
   renderResult(
@@ -510,13 +512,18 @@ export const editRenderers = {
       );
     }
     if (details) {
-      return createDiffComponent({
+      const component = createDiffComponent({
         details,
         expanded: options.expanded,
         showHeader: false,
         theme,
-      }, context.lastComponent);
+        onToggle: context.invalidate,
+      }, context.state.diffComponent ?? context.lastComponent);
+      context.state.diffComponent = component;
+      return component;
     }
+
+    context.state.diffComponent = undefined;
 
     // Preserve readable output for errors or an unrecognized persisted format.
     const text = context.isError

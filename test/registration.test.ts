@@ -6,6 +6,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { installGenericToolRenderer } from "../generic.ts";
 import registerCodexRenderers from "../index.ts";
+import { Text, stripTerminalSequences } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { codexBashRenderers } from "../renderers.ts";
 
 describe("renderer registration", () => {
   test("registers six non-bash definitions with self-rendered shells", () => {
@@ -98,7 +101,7 @@ describe("renderer registration", () => {
   test("preserves rich renderers from registered tools or later resolvers", () => {
     const resolve = installResolver();
     const component = () => ({ render: () => [], invalidate() {} });
-    for (const name of ["Custom", "apply_patch", "SubagentWorkflow", "bash", "read"]) {
+    for (const name of ["Custom", "apply_patch", "read"]) {
       for (const existing of [
         { renderCall: component },
         { renderResult: component },
@@ -118,6 +121,69 @@ describe("renderer registration", () => {
     const laterResolver: ToolRendererResolver = () => ({ renderCall: component });
     const rich = laterResolver("LateTool", () => undefined);
     expect(resolve("LateTool", () => rich)).toBe(rich);
+  });
+
+  test("overrides stale bundled Bash presentation without replacing sandbox execution", () => {
+    const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text } as Theme;
+    const legacyCall = () => new Text("• Ran echo ok", 0, 0);
+    const execute = async () => ({ content: [], details: undefined });
+    const sandboxTool = Object.freeze({ name: "bash", label: "bash (sandboxed)",
+      parameters: { type: "object" }, executionMode: "sequential", execute,
+      renderCall: legacyCall, renderResult: () => new Text("Legacy output", 0, 0) });
+    for (let reload = 0; reload < 2; reload++) {
+      const resolve = installResolver();
+      const presentation = resolve("bash", () => sandboxTool)!;
+      expectPresentationOnly(presentation);
+      expect(presentation).toBe(codexBashRenderers);
+      const resolved = { ...sandboxTool, ...presentation };
+      expect(resolved.execute).toBe(execute);
+      expect(resolved.parameters).toBe(sandboxTool.parameters);
+      expect(resolved.executionMode).toBe("sequential");
+      expect(sandboxTool.renderCall).toBe(legacyCall);
+      const args = { command: "echo ok" };
+      const ctx = { args, state: {}, isPartial: false, isError: false, executionStarted: false } as any;
+      const call = resolved.renderCall!(args, theme, ctx);
+      const rows = call.render(80).map(stripTerminalSequences);
+      expect(rows[0]).toStartWith("• Bash(echo ok)");
+      expect(rows.join("\n")).not.toContain("Ran ");
+      expectPresentationOnly(resolve("bash", () => undefined));
+    }
+  });
+
+  test("aliases known rich-tool headers without replacing result views or native state", () => {
+    const resolve = installResolver();
+    const theme = { fg: (_: string, text: string) => text, bold: (text: string) => text } as Theme;
+    for (const name of ["SubagentWorkflow", "TaskUpdate", "mcp", "ask_user_question"]) {
+      let nativeCalls = 0;
+      const native = new Text("Original", 0, 0);
+      const resultView = new Text("Rich result", 0, 0);
+      const existing = {
+        renderCall(_args: any, _theme: any, ctx: any) {
+          expect(ctx.lastComponent).toBe(nativeCalls ? native : undefined);
+          ctx.state.callComponent = native;
+          nativeCalls++;
+          return native;
+        },
+        renderResult(_result: any, _options: any, _theme: any, ctx: any) {
+          expect(ctx.state.callComponent).toBe(native);
+          return resultView;
+        },
+      };
+      const adapted = resolve(name, () => existing)!;
+      expectPresentationOnly(adapted);
+      expect(adapted.renderResult).toBe(existing.renderResult);
+      const args = name === "SubagentWorkflow" ? { name: "review" } : {};
+      const ctx = { state: {}, args, isPartial: true, isError: false } as any;
+      const header = adapted.renderCall!(args, theme, ctx);
+      expect(header).not.toBe(native);
+      const title = header.render(80).map(stripTerminalSequences).join("\n");
+      expect(title).toStartWith("• ");
+      expect(title).not.toMatch(/^[●⏺]/u);
+      if (name === "SubagentWorkflow") expect(title).toContain("Workflow(review)");
+      expect(adapted.renderCall!(args, theme, { ...ctx, lastComponent: header })).toBe(header);
+      expect(nativeCalls).toBe(2);
+      expect(adapted.renderResult!({ content: [], details: undefined }, { expanded: true, isPartial: false }, theme, ctx)).toBe(resultView);
+    }
   });
 
   test("explicitly overrides Agent, browser and web cards without execution replacement", () => {

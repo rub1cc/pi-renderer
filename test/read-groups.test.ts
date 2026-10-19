@@ -874,7 +874,7 @@ describe("exploration group presentation", () => {
     expect(header.expanded).toBe(false);
     expect(clickRow(host, "Reading 2 files")?.handled).toBe(true);
     expect(header.render(80)).toHaveLength(2);
-    expect(rows(host).join("\n")).toContain("• Reading a.txt");
+    expect(rows(host).join("\n")).toContain("Read(a.txt) · running…");
     expect(rows(host).join("\n")).not.toContain("⎿ Reading a.txt");
     clickRow(host, "Reading 2 files");
     expect(rows(host)[2]).toBe("  ⎿ Reading a.txt");
@@ -941,7 +941,7 @@ describe("exploration group presentation", () => {
     }
   });
 
-  test("status dots carry color while summaries remain neutral and hints muted", () => {
+  test("small status dots carry color and preserve aliases, error counts and muted hints", () => {
     const previous = getKeybindings();
     setKeybindings(new KeybindingsManager({ "app.tools.expand": { defaultKeys: "ctrl+o" } }));
     try {
@@ -953,17 +953,19 @@ describe("exploration group presentation", () => {
       const b = tool(host, call("b"));
       let header = headers(host)[0].render(180)[1];
       expect(header).toContain("\u001b[32m•\u001b[39m");
+      expect(stripTerminalSequences(header)).not.toMatch(/^[●⏺]/u);
       expect(header).toContain("\u001b[37mRead 2 files\u001b[39m");
       expect(header).toContain("\u001b[90m (ctrl+o to expand all)\u001b[39m");
       b.updateResult({ content: [{ type: "text", text: "Progress" }] }, true);
       header = headers(host)[0].render(180)[1];
       expect(header).toContain("\u001b[36m•\u001b[39m");
-      expect(header).toContain("\u001b[37mReading 2 files\u001b[39m");
+      expect(header).toContain("\u001b[36mReading 2 files\u001b[39m");
       a.updateResult({ content: [], isError: true });
       const failed = headers(host)[0].render(180);
       expect(failed[1]).toContain("\u001b[31m•\u001b[39m");
+      expect(stripTerminalSequences(failed[1])).not.toMatch(/^[●⏺]/u);
       expect(failed[1]).toContain("\u001b[31m1 failed\u001b[39m");
-      expect(failed[1]).toContain("\u001b[37mReading 2 files\u001b[39m");
+      expect(failed[1]).toContain("\u001b[36mReading 2 files\u001b[39m");
       expect(failed[2]).toContain("\u001b[31ma.txt: Tool failed\u001b[39m");
     } finally {
       setKeybindings(previous);

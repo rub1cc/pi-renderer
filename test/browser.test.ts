@@ -28,9 +28,9 @@ test("browser snapshot/click/eval use compact reusable activity headers", () => 
     const args = { args: argv };
     const context = ctx(args);
     const call = adapter.renderCall(args, theme, { ...context, isPartial: true });
-    expect(rows(call).join("\n")).toContain(`Running agent_browser ${argv[0]}`);
+    expect(rows(call).join("\n")).toContain(`Browser(${argv[0]}`);
     expect(adapter.renderCall(args, theme, { ...context, lastComponent: call })).toBe(call);
-    expect(rows(call).join("\n")).toContain(`Ran agent_browser ${argv[0]}`);
+    expect(rows(call).join("\n")).toContain(`Browser(${argv[0]}`);
     expect(rows(call).join("\n")).not.toContain("JSON.stringify");
     if (argv[0] !== "eval") expect(rows(call).join("\n")).toContain(argv.join(" "));
   }
@@ -74,7 +74,7 @@ test("native failure categories update the header and sanitized result", () => {
   const call = adapter.renderCall(context.args, theme, context);
   const output = adapter.renderResult(result("\u001b[31mfailed\u001b[0m", { resultCategory: "failure" }),
     { expanded: false, isPartial: false }, theme, context);
-  expect(rows(call).join("\n")).toContain("Failed agent_browser click @e3");
+  expect(rows(call).join("\n")).toContain("Browser(click @e3) · Failed");
   expect(rows(output).join("\n")).toContain("failed");
 });
 

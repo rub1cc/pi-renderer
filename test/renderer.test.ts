@@ -12,6 +12,7 @@ import {
   CompactionSummaryMessageComponent,
   getMarkdownTheme,
   initTheme,
+  ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import {
   getKeybindings,
@@ -175,7 +176,7 @@ describe("compaction renderer", () => {
 
     const collapsed = render(component);
     expect(collapsed).toHaveLength(1);
-    expect(collapsed[0]).toContain("• Compacted context");
+    expect(collapsed[0]).toContain("Compacted context");
     expect(collapsed[0]).toContain("250,014 tokens");
     expect(collapsed[0]).toContain("to expand");
     expect(collapsed[0]).not.toContain("[compaction]");
@@ -183,7 +184,7 @@ describe("compaction renderer", () => {
 
     component.setExpanded(true);
     const expanded = render(component);
-    expect(expanded[0]).toContain("• Compacted context");
+    expect(expanded[0]).toContain("Compacted context");
     expect(expanded.join("\n")).toContain("Current state");
     expect(expanded.join("\n")).toContain("Keep the renderer compact.");
     expect(expanded.slice(1).some((line) => line.includes("⎿"))).toBe(true);
@@ -210,7 +211,20 @@ describe("compaction renderer", () => {
 });
 
 describe("bash renderer", () => {
-  test("transitions Running to Ran, keeps tail output, and freezes duration", () => {
+  test("colors command arguments with the shared accent color", () => {
+    const colors: Array<[string, string]> = [];
+    const trackedTheme = { ...theme, fg: (color: string, value: string) => {
+      colors.push([color, value]);
+      return value;
+    } } as Theme;
+    const ctx = context({ command: "npm test" }, {}, { executionStarted: false });
+    const call = createCodexBashRenderers().renderCall(ctx.args, trackedTheme, ctx);
+    expect(render(call).join("\n")).toContain("• Bash(npm test)");
+    expect(colors).toContainEqual(["accent", "npm test"]);
+    expect(colors).not.toContainEqual(["toolOutput", "npm test"]);
+  });
+
+  test("keeps a stable Bash label, clears running status, and freezes duration", () => {
     let now = 1_000;
     let cleared = false;
     const timer = { unref() {} } as ReturnType<typeof setInterval>;
@@ -231,13 +245,15 @@ describe("bash renderer", () => {
     );
 
     const call = renderers.renderCall(ctx.args, theme, ctx);
-    expect(render(call).join("\n")).toContain("Running npm test");
+    expect(render(call).join("\n")).toContain("Bash(npm test)");
+    expect(render(call).join("\n")).toContain("running…");
 
     now = 2_400;
     ctx.isPartial = false;
     ctx.lastComponent = call;
     expect(renderers.renderCall(ctx.args, theme, ctx)).toBe(call);
-    expect(render(call).join("\n")).toContain("Ran npm test");
+    expect(render(call).join("\n")).toContain("Bash(npm test)");
+    expect(render(call).join("\n")).not.toContain("running…");
     expect(render(call).join("\n")).toContain("1.4s");
     expect(cleared).toBe(true);
 
@@ -272,24 +288,25 @@ describe("bash renderer", () => {
       theme,
       { ...ctx, lastComponent: undefined },
     );
-    expect(render(call).join("\n")).toContain("Failed (exit 2) false");
+    expect(render(call).join("\n")).toContain("Failed (exit 2)");
   });
 });
 
 describe("built-in renderers", () => {
-  test("uses semantic completed labels", () => {
+  test("uses aliased function labels with small activity dots", () => {
     const cases = [
-      [readRenderers, { path: "src/a.ts" }, "Read src/a.ts"],
-      [grepRenderers, { pattern: "foo", path: "src" }, "Searched /foo/ in src"],
-      [findRenderers, { pattern: "*.ts", path: "src" }, "Searched *.ts in src"],
-      [lsRenderers, { path: "src" }, "Listed src"],
-      [writeRenderers, { path: "src/a.ts", content: "one\ntwo\n" }, "Wrote src/a.ts (2 lines)"],
+      [readRenderers, { path: "src/a.ts" }, "Read(src/a.ts)"],
+      [grepRenderers, { pattern: "foo", path: "src" }, "Grep(/foo/ in src)"],
+      [findRenderers, { pattern: "*.ts", path: "src" }, "Glob(*.ts in src)"],
+      [lsRenderers, { path: "src" }, "List(src)"],
+      [writeRenderers, { path: "src/a.ts", content: "one\ntwo\n" }, "Write(src/a.ts) (2 lines)"],
     ] as const;
 
     for (const [tool, args, expected] of cases) {
       const ctx = context(args, {});
       const call = tool.renderCall(args as any, theme, ctx);
       expect(render(call)[0]).toStartWith("• ");
+      expect(render(call)[0]).not.toMatch(/^[●⏺]/u);
       expect(render(call).join("\n")).toContain(expected);
       expect(tool.renderShell).toBe("self");
     }
@@ -366,7 +383,7 @@ describe("built-in renderers", () => {
       theme,
       { ...ctx, lastComponent: undefined },
     );
-    expect(render(call).join("\n")).toContain("Edited src/a.ts (+1 -1)");
+    expect(render(call).join("\n")).toContain("Update(src/a.ts) (+1 -1)");
     expect(render(output)).toHaveLength(4);
     expect(render(output).join("\n")).toContain("3 │  after");
     expect(render(output).join("\n")).not.toContain("to expand");
@@ -417,7 +434,7 @@ describe("built-in renderers", () => {
     expect(render(unknown).join("\n")).toContain("unrecognized legacy diff");
   });
 
-  test("shows 24 diff rows before requiring expansion", () => {
+  test("shows every diff row by default, including rows beyond the compact preview", () => {
     const ctx = context({ path: "large.ts", edits: [] }, {});
     for (const count of [24, 25]) {
       const diff = Array.from({ length: count }, (_, i) => `+${i + 1} added_${i}`).join("\n");
@@ -426,8 +443,9 @@ describe("built-in renderers", () => {
         { expanded: false, isPartial: false }, theme, ctx,
       );
       const rows = render(output);
-      expect(rows).toHaveLength(count === 24 ? 24 : 25);
-      expect(rows.join("\n").includes("1 more diff rows")).toBe(count === 25);
+      expect(rows).toHaveLength(count === 24 ? 24 : 26);
+      expect(rows.join("\n")).not.toContain("more diff rows");
+      expect(rows.join("\n")).toContain(`added_${count - 1}`);
     }
   });
 
@@ -440,10 +458,19 @@ describe("built-in renderers", () => {
       const ctx = context({ path: "large.ts", edits: [] }, {});
       const diff = Array.from({ length: 600 }, (_, i) => `+${i + 1} added_${i}`).join("\n");
       const result = textResult("", { diff });
-      const collapsed = editRenderers.renderResult(
+      const initial = editRenderers.renderResult(
         result, { expanded: false, isPartial: false }, theme, ctx,
       );
-      expect(render(collapsed).join("\n")).toContain("ctrl+y to expand");
+      expect(render(initial).join("\n")).toContain("added_599");
+      expect(render(initial).join("\n")).toContain("click to collapse");
+      (initial as { toggleExpanded(): void }).toggleExpanded();
+      const collapsed = editRenderers.renderResult(
+        result, { expanded: false, isPartial: false }, theme,
+        { ...ctx, lastComponent: initial },
+      );
+      expect(collapsed).toBe(initial);
+      expect(render(collapsed).join("\n")).toContain("click to expand");
+      expect(render(collapsed).join("\n")).toContain("ctrl+y to toggle all");
       expect(render(collapsed).join("\n")).not.toContain("added_599");
       const expanded = editRenderers.renderResult(
         result, { expanded: true, isPartial: false }, theme,
@@ -452,7 +479,7 @@ describe("built-in renderers", () => {
       expect(expanded).toBe(collapsed);
       expect(render(expanded)).toHaveLength(601);
       expect(render(expanded).join("\n")).toContain("added_599");
-      expect(render(expanded).join("\n")).toContain("ctrl+y to collapse");
+      expect(render(expanded).join("\n")).toContain("click to collapse");
       const restored = editRenderers.renderResult(
         result, { expanded: false, isPartial: false }, theme,
         { ...ctx, lastComponent: expanded },
@@ -474,22 +501,46 @@ describe("built-in renderers", () => {
     expect(rows.every((row) => visibleWidth(row) <= 20)).toBe(true);
     expect(rows.join("").replace(/\s|└|│/gu, "")).toContain("x".repeat(300) + "TAIL_MARKER");
   });
+
+  test("native Update header and body clicks collapse full diffs and retain state across redraws", () => {
+    const args = { path: "large.ts", edits: [] };
+    const host = new ToolExecutionComponent("edit", "edit-1", args, {}, editRenderers as any,
+      { requestRender() {} } as any, "/repo");
+    host.updateResult({ content: [{ type: "text", text: "Updated" }], details: {
+      diff: Array.from({ length: 80 }, (_, i) => `+${i + 1} added_${i}`).join("\n"),
+    } });
+    const text = () => render(host).join("\n");
+    expect(text()).toContain("added_79");
+    expect(text()).toContain("• Update(large.ts)");
+    const click = (y: number) => host.handleMouse({ type: "click", button: "left", x: 3, y,
+      width: 80, height: host.render(80).length });
+    expect(click(1)?.handled).toBe(true);
+    expect(text()).not.toContain("added_79");
+    host.invalidate();
+    expect(text()).not.toContain("added_79");
+    expect(click(3)?.handled).toBe(true);
+    expect(text()).toContain("added_79");
+    host.setExpanded(true);
+    expect(text()).toContain("added_79");
+    host.setExpanded(false);
+    expect(text()).not.toContain("added_79");
+  });
 });
 
 describe("generic extension-tool renderer", () => {
-  test("renders compact Calling and Called states", () => {
+  test("renders aliased calls with compact argument summaries", () => {
     const renderers = createGenericToolRenderers("TaskUpdate");
     const args = { taskId: "6", status: "completed" };
     const state = {};
     const active = context(args, state, { isPartial: true });
     const call = renderers.renderCall(args, theme, active);
     expect(render(call).join("\n")).toContain(
-      'Calling TaskUpdate({"taskId":"6","status":"completed"})',
+      'UpdateTask(#6, completed) · running…',
     );
 
     const completed = { ...active, isPartial: false, lastComponent: call };
     expect(renderers.renderCall(args, theme, completed)).toBe(call);
-    expect(render(call).join("\n")).toContain("Called TaskUpdate");
+    expect(render(call).join("\n")).toContain("UpdateTask(#6, completed)");
 
     const output = renderers.renderResult(
       textResult("one\ntwo\nthree\nfour"),
@@ -504,7 +555,7 @@ describe("generic extension-tool renderer", () => {
     const renderers = createGenericToolRenderers("unsafe\u001b[31m-tool");
     const ctx = context({}, {}, { isPartial: false, isError: true });
     const call = renderers.renderCall({}, theme, ctx);
-    expect(render(call).join("\n")).toContain("Failed unsafe-tool");
+    expect(render(call).join("\n")).toContain("unsafe-tool() · Failed");
 
     const output = renderers.renderResult(
       textResult("\u001b[31mboom\u001b[0m"),
@@ -515,7 +566,7 @@ describe("generic extension-tool renderer", () => {
     expect(render(output).join("\n")).toContain("boom");
   });
 
-  test("adapts Agent progress and completion to bullet states", () => {
+  test("adapts Agent progress and completion to small-dot function labels", () => {
     const renderers = createAgentToolRenderers();
     const args = {
       description: "Review renderer behavior",
@@ -525,7 +576,7 @@ describe("generic extension-tool renderer", () => {
     const active = context(args, state, { isPartial: true });
     const call = renderers.renderCall(args, theme, active);
     expect(render(call).join("\n")).toContain(
-      "Running Review renderer behavior",
+      'Agent(Explore, "Review renderer behavior")',
     );
 
     const progress = renderers.renderResult(
@@ -559,7 +610,7 @@ describe("generic extension-tool renderer", () => {
       completed,
     );
     expect(render(call).join("\n")).toContain(
-      "Ran Review renderer behavior",
+      'Agent(Explore, "Review renderer behavior")',
     );
     expect(render(call).join("\n")).toContain("2.5s");
     expect(render(output).join("\n")).toContain("+1 line");
@@ -581,7 +632,7 @@ describe("generic extension-tool renderer", () => {
       theme,
       ctx,
     );
-    expect(render(call).join("\n")).toContain("Called Resume old agent");
+    expect(render(call).join("\n")).toContain('Agent(general-purpose, "Resume old agent")');
     expect(render(output).join("\n")).toContain("Agent not found");
   });
 });
@@ -593,7 +644,7 @@ describe("web extension renderers", () => {
     const state = {};
     const active = context(args, state, { isPartial: true });
     const call = renderers.renderCall(args, theme, active);
-    expect(render(call).join("\n")).toContain("Searching 3 queries");
+    expect(render(call).join("\n")).toContain("WebSearch(3 queries) · running…");
 
     const progress = renderers.renderResult(
       textResult('Searching "second query" (1/3 complete)...', {
@@ -619,17 +670,18 @@ describe("web extension renderers", () => {
       theme,
       completed,
     );
-    expect(render(call).join("\n")).toContain("Searched 3 queries");
+    expect(render(call).join("\n")).toContain("WebSearch(3 queries)");
     expect(render(call).join("\n")).toContain("3/3 queries · 15 sources");
-    expect(render(output).join("\n")).toContain("+1 line");
+    expect(render(output).join("\n")).toContain("15 sources");
+    expect(render(output).join("\n")).not.toContain("source one");
     expect(renderers.renderShell).toBe("self");
   });
 
   test("uses semantic headers for the remaining web tools", () => {
     const cases = [
-      ["source_check", { claim: "The claim" }, "Checked The claim"],
-      ["fetch_content", { url: "https://example.test/page" }, "Fetched https://example.test/page"],
-      ["get_search_content", { responseId: "search-result-id" }, "Read search-result-id"],
+      ["source_check", { claim: "The claim" }, "CheckSources(The claim)"],
+      ["fetch_content", { url: "https://example.test/page" }, "WebFetch(https://example.test/page)"],
+      ["get_search_content", { responseId: "search-result-id" }, "WebContent(search-result-id)"],
     ] as const;
 
     for (const [name, args, expected] of cases) {
@@ -658,6 +710,7 @@ describe("web extension renderers", () => {
       theme,
     );
     const output = render(component).join("\n");
+    expect(output).toStartWith("• ");
     expect(output).toContain("Fetched web content");
     expect(output).toContain("Content fetched for 2/2 URLs");
 

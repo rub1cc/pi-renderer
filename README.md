@@ -16,12 +16,12 @@ pi -e npm:@rub1cc/pi-renderer
 ```
 
 ```text
-• Read src/auth.ts
+• Read(src/auth.ts)
 
-• Ran npm test (1.4s)
+• Bash(npm test) (1.4s)
   ⎿ Tests: 12 passed
 
-• Searched /refreshSession/ in src
+• Grep(/refreshSession/ in src)
   ⎿ src/auth.ts:42: return refreshSession(token)
     … +4 lines (ctrl+o to expand)
 ```
@@ -29,18 +29,20 @@ pi -e npm:@rub1cc/pi-renderer
 ## Behavior
 
 - Transparent activity rows instead of full-width status cards.
-- Shared status dots and `⎿` output gutters for standard activity, compaction,
-  and web notification rows. Dots carry status color; exploration summaries
-  use normal title text with muted expansion hints.
-- Semantic `Reading`/`Read`, `Running`/`Ran`, `Searching`/`Searched`,
-  `Writing`/`Wrote`, and `Editing`/`Edited` states.
+- Small `•` activity dots, aliased `Label(arguments)` tool headers, and `⎿` output gutters.
+  Active labels use the accent color with a muted `running…` suffix; failures
+  keep an explicit red `Failed` suffix. Completed labels stay stable.
+- Display-only aliases such as `Read`, `Grep`, `Glob`, `List`, `Bash`, `Patch`,
+  `WebSearch`, `CheckSources`, `WebFetch`, and `WebContent`. Actual tool names,
+  arguments, execution, and session records are unchanged.
 - Three-row previews for most tool output; successful reads stay header-only
   until expanded.
 - `edit` and `apply_patch` use the same unified diff renderer: full-row red/green
   backgrounds on changes, transparent context, and matching line-number gutters.
-- Edit diffs up to 24 visual rows appear in full. Larger diffs show a 24-row
-  preview; expanding reveals every available diff row with wrapped long lines
-  and a collapse hint.
+- Edit and patch diffs show every changed hunk inline by default, with wrapped
+  long lines and a collapse hint. Clicking their header or body toggles a compact
+  24-row preview. The local view survives redraws and resizing; global tool
+  expansion/collapse changes override it without affecting other tool defaults.
 - Pi's native click/`ctrl+o` expansion, with hints following configured keys.
 - Flat, clickable compaction rows in place of Pi's full-width purple card;
   `ctrl+o` still expands the generated context summary.
@@ -58,7 +60,7 @@ Consecutive `read`, `grep`, `find`, and `ls` calls collapse into a combined
 Claude Code-style summary:
 
 ```text
-Searched for 1 pattern, read 2 files, listed 1 directory
+• Searched for 1 pattern, read 2 files, listed 1 directory
 ```
 
 `grep` and `find` each count as a pattern search. Reads count distinct normalized
@@ -112,33 +114,64 @@ and session records are retained. HTML exports remain ungrouped. It uses guarded
 private transcript hooks tested against Pi 1.3.0; unknown host/component shapes
 fall back to normal per-call rendering.
 
+### Other activity groups
+
+Consecutive related calls also collapse into separate category summaries:
+
+```text
+• Web research · 2 searches, 3 fetches, 5 content reads
+• Task activity · 1 creation, 3 updates
+• Status checks · 3 agent checks, 1 task check
+• Browser inspection · 2 snapshots, 1 read
+```
+
+- Web research includes `web_search`, `source_check`, `fetch_content`, and
+  `get_search_content`. Counts describe tool operations, not query counts,
+  URLs, unique targets, or claims of successful completion.
+- Task activity includes `TaskCreate`, `TaskUpdate`, `TaskList`, and `TaskGet`.
+  Task deletion, execution, and stopping remain standalone actions.
+- Status checks include `get_subagent_result` and `TaskOutput`.
+- Browser inspection uses a strict allowlist of native `snapshot`, supported
+  `get`, and `is` commands. Clicks, typing, navigation, screenshots, batches,
+  arbitrary code, unknown flags, and output writes remain standalone.
+
+Groups never combine categories or move calls across explanations, user/custom
+messages, interruptions, or consequential actions. Single calls keep their own
+headers. Hidden-thinking behavior and click/global expansion work like filesystem
+groups: expand to see the original aliased calls in order, then expand individual
+results as needed. A running group shows the actual executing call, not queued
+work. Failure counts and a bounded first error remain visible while collapsed,
+including partial web failures and explicitly reported background-task failures.
+Returned web/browser images remain ungrouped so artifacts stay visible.
+
 The extension registers `read`, `grep`, `find`, `ls`, `write`, and `edit`.
 It deliberately does not register `bash` or `apply_patch`.
 `edit` and `write` are registered with hidden exposure: they are unavailable to
 the model and nested tool calls, but their renderers remain available for
 historical results. Use `apply_patch` for file creation and edits instead.
 
-Extension tools that provide no renderer receive a generic Codex-style
-fallback:
+Extension tools that provide no renderer receive a compact function-style
+fallback. Known tools use display aliases and concise argument summaries:
 
 ```text
-• Called TaskUpdate({"taskId":"6","status":"completed"})
+• UpdateTask(#6, completed)
   ⎿ Updated task #6 status
 ```
 
 The fallback uses Pi's public `registerToolRenderer` API (Pi 1.0.1+), including
 for tools not yet registered when a session is resumed. It does not re-register
-the tool or replace its execution function. Renderers supplied by later
-resolvers or registered tools remain untouched when either callback is present.
+the tool or replace its execution function. Unknown rich custom renderers remain
+untouched. Known aliased tools receive only a header adapter: their native call
+state and rich result renderer are preserved.
 
 The `Agent` tool is one deliberate exception. `pi-subagents` supplies a
 Claude-style full-width card, so the renderer replaces only its presentation
-with flat `Running`/`Ran`/`Started` bullet states and a bounded activity/result
-tree. Agent execution and progress metadata are preserved. Other rich custom
-renderers, including `SubagentWorkflow`, remain untouched.
+with `Agent(type, "description")` headers and a bounded activity/result tree.
+Agent execution and progress metadata are preserved. `SubagentWorkflow` uses
+the `Workflow(name)` header while retaining its rich progress/results view.
 
 The `agent_browser` family also replaces native full-width cards with compact
-`Running`/`Ran` rows (for example, `agent_browser snapshot -i` or `click @e3`).
+`Browser(...)` rows (for example, `Browser(snapshot -i)` or `Browser(click @e3)`).
 Output previews show three visual rows; expansion reveals the complete wrapped
 result. Headers omit arbitrary input values, eval/code bodies, and stdin to
 avoid exposing secrets. Failure categories remain failures, and completed
@@ -147,8 +180,13 @@ text results, and host-rendered image payloads are unchanged.
 
 The web-access tools are also adapted because their native search/fetch cards
 use a full-width shell. `web_search`, `source_check`, `fetch_content`, and
-`get_search_content` receive semantic bullet states while keeping their
-model-facing results unchanged. Background content-ready and fetch-error
+`get_search_content` receive aliased function headers while keeping their
+model-facing results unchanged. Completed successful calls use concise native
+titles and result counts rather than previewing raw Markdown scaffolding and
+blank lines. Expanding restores the complete original output. Unknown result
+shapes fall back to a normal raw preview; streaming output and error diagnostics
+stay visible. Partial query/fetch failures are never summarized as all-success.
+Background content-ready and fetch-error
 messages use the same flat activity-and-tree layout instead of Pi's default
 purple custom-message card.
 
@@ -160,6 +198,12 @@ those renderer callbacks to its existing sandbox-owned tool definition. This
 avoids a duplicate registration that could otherwise bypass OS-level
 sandboxing.
 
+The active renderer also resolves Bash presentation through the public
+`registerToolRenderer` API. That keeps `/reload` on the current `Bash(...)`
+display even when the sandbox's installed dependency bundles an older renderer.
+Only the display callbacks change; the sandbox-owned execution function,
+parameter schema, and permission checks remain intact.
+
 The renderer imports only the presentation API from
 `@rub1cc/pi-apply-patch/renderer`; it does not register or execute `apply_patch`.
 That dependency is bundled so installation does not require a sibling checkout.
@@ -170,13 +214,17 @@ source. Before publishing, verify `npm pack --dry-run` includes the bundled
 ## Architecture
 
 - `components.ts` contains reusable activity and tree-preview components.
+- `labels.ts` defines display aliases and bounded argument summaries for task,
+  workflow, question, MCP, and other known tool headers.
+- `group-model.ts` classifies safe activity categories and formats operation
+  counts, live targets, and failure details without changing tool execution.
 - `compaction.ts` replaces Pi's compaction card presentation while preserving
   its native summary, shortcut, and click-to-expand behavior.
 - `renderers.ts` contains tool-specific presentation and exports the composable
   bash renderer.
 - `generic.ts` supplies presentation for renderer-less third-party tools
   without taking ownership of their execution.
-- `read-groups.ts` decorates the interactive transcript with expandable exploration
+- `read-groups.ts` decorates the interactive transcript with expandable activity
   groups and fully hides reasoning when the existing setting requests it, while
   retaining original assistant/tool components for native keyboard/mouse behavior.
 - `web.ts` adapts pi-web-access tools and asynchronous fetch notifications

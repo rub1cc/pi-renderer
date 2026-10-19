@@ -2,6 +2,7 @@ import type {
   AgentToolResult,
   ExtensionAPI,
   Theme,
+  ToolRenderers,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -12,9 +13,10 @@ import {
   inlineText,
   renderActivityHeader,
   renderTreeOutput,
-  sanitizeTerminalText,
 } from "./components.ts";
 import { createWebToolRenderers } from "./web.ts";
+import { TOOL_LABELS, toolArgumentSummary, toolLabel } from "./labels.ts";
+import { codexBashRenderers } from "./renderers.ts";
 
 interface AgentToolDetails {
   description?: string;
@@ -45,21 +47,6 @@ interface AgentCodexRenderState extends CodexRenderState {
   fallbackResult?: boolean;
 }
 
-function compactArguments(args: unknown): string {
-  if (!args || typeof args !== "object") return "";
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(args);
-  } catch {
-    return "";
-  }
-  if (!serialized || serialized === "{}") return "";
-
-  const safe = sanitizeTerminalText(serialized).replace(/\s+/gu, " ");
-  const limit = 160;
-  return safe.length > limit ? `${safe.slice(0, limit - 1)}…` : safe;
-}
-
 /** Codex-style fallback for extension tools that provide no renderer at all. */
 export function createGenericToolRenderers(toolName: string) {
   return {
@@ -70,19 +57,13 @@ export function createGenericToolRenderers(toolName: string) {
       theme: Theme,
       context: RendererContext<CodexRenderState, unknown>,
     ) {
-      const argumentText = compactArguments(args);
-      const name = inlineText(toolName) || "tool";
-      const subject = theme.fg(
-        "accent",
-        argumentText ? `${name}(${argumentText})` : name,
-      );
+      const subject = theme.fg("accent", toolArgumentSummary(toolName, args));
       return renderActivityHeader(
         context.state,
         context.lastComponent,
         {
           status: activityStatus(context),
-          activeVerb: "Calling",
-          successVerb: "Called",
+          label: toolLabel(toolName),
           subject,
         },
         theme,
@@ -117,26 +98,6 @@ interface BrowserRenderState extends CodexRenderState {
   resultFailed?: boolean;
 }
 
-function browserSubject(toolName: string, args: unknown): string {
-  if (!args || typeof args !== "object") return toolName;
-  const input = args as Record<string, unknown>;
-  // Show operation names, not arbitrary values/code/stdin. Replacing the
-  // native redacted renderer must not reveal secrets in argument previews.
-  if (toolName !== "agent_browser") {
-    const action = typeof input.action === "string" && /^[a-z-]+$/.test(input.action)
-      ? input.action : "";
-    return action ? `${toolName} ${action}` : toolName;
-  }
-  if (!Array.isArray(input.args)) return toolName;
-  const [command, ...rest] = input.args;
-  if (typeof command !== "string" || !/^[a-z][a-z-]*$/.test(command)) return toolName;
-  const safeFlags = new Set(["-i", "--interactive", "--json", "--full", "--labels", "--compact"]);
-  const safe = rest.filter((value): value is string =>
-    typeof value === "string" && (safeFlags.has(value) || /^@e\d+$/.test(value)),
-  );
-  return [toolName, command, ...safe].join(" ");
-}
-
 /** Presentation-only browser adapter; results and image payloads stay intact. */
 export function createBrowserToolRenderers(toolName = "agent_browser") {
   return {
@@ -144,8 +105,8 @@ export function createBrowserToolRenderers(toolName = "agent_browser") {
     renderCall(args: unknown, theme: Theme, context: RendererContext<BrowserRenderState, unknown>) {
       return renderActivityHeader(context.state, context.lastComponent, {
         status: context.state.resultFailed ? "error" : activityStatus(context),
-        activeVerb: "Running", successVerb: "Ran",
-        subject: theme.fg("accent", browserSubject(toolName, args)),
+        label: toolLabel(toolName),
+        subject: theme.fg("accent", toolArgumentSummary(toolName, args)),
       }, theme);
     },
     renderResult(
@@ -159,8 +120,8 @@ export function createBrowserToolRenderers(toolName = "agent_browser") {
       // A completed browser action is not necessarily a verified page change.
       renderActivityHeader(context.state, context.state.callComponent, {
         status: failed ? "error" : options.isPartial ? "active" : "success",
-        activeVerb: "Running", successVerb: "Ran",
-        subject: theme.fg("accent", browserSubject(toolName, context.args)),
+        label: toolLabel(toolName),
+        subject: theme.fg("accent", toolArgumentSummary(toolName, context.args)),
       }, theme);
       return renderTreeOutput(context.lastComponent, {
         text: getTextOutput(result) || (typeof details?.summary === "string" ? details.summary : ""),
@@ -212,53 +173,40 @@ function agentStats(details: AgentToolDetails | undefined, theme: Theme): string
 function agentPresentation(
   state: AgentCodexRenderState,
   context: RendererContext<AgentCodexRenderState, unknown>,
-): { status: "active" | "success" | "error"; activeVerb: string; successVerb: string; errorVerb: string } {
+): { status: "active" | "success" | "error"; statusText?: string } {
   const details = state.details;
   if (context.isError || details?.status === "error" || details?.status === "aborted") {
     return {
       status: "error",
-      activeVerb: "Running",
-      successVerb: "Ran",
-      errorVerb: details?.status === "aborted" ? "Aborted" : "Failed",
+      statusText: details?.status === "aborted" ? "Aborted" : "Failed",
     };
   }
   if (details?.status === "stopped") {
     return {
       status: "error",
-      activeVerb: "Running",
-      successVerb: "Ran",
-      errorVerb: "Stopped",
+      statusText: "Stopped",
     };
   }
   if (context.isPartial || details?.status === "running" || details?.status === "queued") {
     return {
       status: "active",
-      activeVerb: "Running",
-      successVerb: "Ran",
-      errorVerb: "Failed",
+      statusText: details?.status === "queued" ? "queued" : undefined,
     };
   }
   if (details?.status === "background") {
     return {
       status: "success",
-      activeVerb: "Starting",
-      successVerb: "Started",
-      errorVerb: "Failed",
+      statusText: "background",
     };
   }
   if (state.fallbackResult) {
     return {
       status: "success",
-      activeVerb: "Calling",
-      successVerb: "Called",
-      errorVerb: "Failed",
     };
   }
   return {
     status: "success",
-    activeVerb: "Running",
-    successVerb: details?.status === "steered" ? "Wrapped up" : "Ran",
-    errorVerb: "Failed",
+    statusText: details?.status === "steered" ? "wrapped up" : undefined,
   };
 }
 
@@ -272,9 +220,13 @@ function renderAgentHeader(
     context.state.callComponent ?? context.lastComponent,
     {
       ...presentation,
+      label: toolLabel("Agent"),
       subject: theme.fg(
         "accent",
-        agentDescription(context.args, context.state.details),
+        [
+          inlineText(context.state.details?.subagentType) || inlineText((context.args as { subagent_type?: unknown } | null)?.subagent_type),
+          JSON.stringify(agentDescription(context.args, context.state.details)),
+        ].filter(Boolean).join(", "),
       ),
       suffix: agentStats(context.state.details, theme),
     },
@@ -329,19 +281,44 @@ export function createAgentToolRenderers() {
   };
 }
 
+const ALIAS_STATE = Symbol("tool-display-alias");
+
+/** Keep rich result views and native call state while replacing only the header. */
+function aliasHeader(toolName: string, existing: ToolRenderers): ToolRenderers {
+  const alias = createGenericToolRenderers(toolName);
+  return {
+    renderShell: "self",
+    renderCall(args, theme, context) {
+      const state = context.state as Record<symbol, { header: CodexRenderState; nativeCall?: any }>;
+      const view = state[ALIAS_STATE] ??= { header: {} };
+      if (existing.renderCall) {
+        view.nativeCall = existing.renderCall(args, theme, { ...context, lastComponent: view.nativeCall });
+      }
+      return alias.renderCall(args, theme, { ...context, state: view.header });
+    },
+    renderResult: existing.renderResult ?? alias.renderResult,
+  };
+}
+
 /** Register presentation only, including fallback for not-yet-registered tools. */
 export function installGenericToolRenderer(pi: ExtensionAPI): void {
   pi.registerToolRenderer((toolName, next) => {
+    // Sandbox may bundle an older renderer. Resolve presentation here without
+    // registering bash again or touching its sandbox-owned execution function.
+    if (toolName === "bash") return codexBashRenderers as ToolRenderers;
+
     const webRenderers = createWebToolRenderers(toolName);
     if (webRenderers) return webRenderers;
 
     if (BROWSER_TOOLS.has(toolName)) return createBrowserToolRenderers(toolName);
 
-    // Adapt the full-width Agent card explicitly. Other rich renderers,
-    // including apply_patch and SubagentWorkflow, retain their presentation.
+    // Execution-owned file renderers keep their specialized presentation.
     if (toolName === "Agent") return createAgentToolRenderers();
 
     const existing = next();
+    if (existing && Object.hasOwn(TOOL_LABELS, toolName) && !["read", "grep", "find", "ls", "write", "edit", "bash", "apply_patch"].includes(toolName)) {
+      return aliasHeader(toolName, existing);
+    }
     if (existing?.renderCall || existing?.renderResult) return existing;
     return createGenericToolRenderers(toolName);
   });

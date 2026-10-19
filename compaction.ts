@@ -92,13 +92,12 @@ export function createCompactionTranscriptComponent(
   onToggle: () => void,
 ): Component {
   const content = new Container();
-  const marker = markdownTheme.listBullet(ACTIVITY_MARKER);
   const title = markdownTheme.bold("Compacted context");
   const tokenText = message.tokensBefore.toLocaleString();
   const hint = expanded ? "" : ` · ${shortcutText()} to expand`;
   const metadata = markdownTheme.linkUrl(`(${tokenText} tokens${hint})`);
 
-  content.addChild(new Text(`${marker} ${title} ${metadata}`, 0, 0));
+  content.addChild(new Text(`${markdownTheme.listBullet(ACTIVITY_MARKER)} ${title} ${metadata}`, 0, 0));
   if (expanded && message.summary) {
     content.addChild(
       new TreeMarkdownComponent(

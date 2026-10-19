@@ -17,12 +17,20 @@ import {
   sanitizeTerminalText,
   treeOutputPrefix,
 } from "./components.ts";
+import {
+  activityFailed,
+  activityFailureText,
+  activityGroupKind,
+  activityGroupSummary,
+  activityTarget,
+  FILE_EXPLORATION_TOOLS,
+  type ActivityGroupKind,
+} from "./group-model.ts";
 
 export const READ_GROUP = Symbol.for("pi.codex-tool-renderer.read-group");
 const PATCH = Symbol.for("pi.codex-tool-renderer.read-groups.patch");
 const CONTROLLER = Symbol.for("pi.codex-tool-renderer.read-groups.controller");
 const GENERATION = Symbol.for("pi.codex-tool-renderer.read-groups.generation");
-const EXPLORATION_TOOLS = new Set(["read", "grep", "find", "ls"]);
 
 type Method = (this: any, ...args: any[]) => any;
 interface Segment { length: number; startsMessage: boolean; endsMessage: boolean }
@@ -37,25 +45,27 @@ interface MemberPatch extends MethodPatch {
   group?: ReadGroupHeader;
 }
 
-function isExploration(child: any): boolean {
-  if (!(child instanceof ToolExecutionComponent) || !EXPLORATION_TOOLS.has(child.toolName) ||
-    typeof child.toolCallId !== "string" || typeof child.render !== "function" ||
-    typeof child.setExpanded !== "function" || typeof child.isPartial !== "boolean" ||
-    child.args === null || typeof child.args !== "object" || Array.isArray(child.args)) return false;
-  const args = child.args;
-  if (child.toolName === "read") return typeof args.path === "string" && args.path.trim().length > 0;
-  if (args.path !== undefined && typeof args.path !== "string") return false;
-  return child.toolName === "ls" || typeof args.pattern === "string";
+function memberKind(child: any): ActivityGroupKind | undefined {
+  if (!(child instanceof ToolExecutionComponent)) return;
+  const member: any = child;
+  if (typeof member.toolCallId !== "string" || typeof member.render !== "function" ||
+    typeof member.setExpanded !== "function" || typeof member.isPartial !== "boolean") return;
+  const kind = activityGroupKind(member.toolName, member.args);
+  // Keep returned screenshots and web images visible rather than hiding artifacts.
+  if (kind !== "files" && member.result?.content?.some((part: any) => part?.type === "image")) return;
+  return kind;
 }
 
 function isAssistant(child: any): boolean {
+  const candidate: any = child;
   return child instanceof AssistantMessageComponent &&
-    typeof child.updateContent === "function" && typeof child.hideThinkingBlock === "boolean" &&
+    typeof child.updateContent === "function" && typeof candidate.hideThinkingBlock === "boolean" &&
     "lastMessage" in child;
 }
 
-function isExplorationCall(part: any): boolean {
-  return part?.type === "toolCall" && EXPLORATION_TOOLS.has(part.name) && typeof part.id === "string";
+function isGroupableCall(part: any): boolean {
+  return part?.type === "toolCall" && typeof part.id === "string" &&
+    (FILE_EXPLORATION_TOOLS.has(part.name) || activityGroupKind(part.name, part.arguments) !== undefined);
 }
 
 function normalizedPath(member: any): string {
@@ -106,6 +116,7 @@ function isPending(member: any): boolean {
 }
 
 function liveTarget(member: any): string {
+  if (!FILE_EXPLORATION_TOOLS.has(member.toolName)) return activityTarget(member);
   const root = displayPath(member.args.path || ".", member.cwd ?? "");
   if (member.toolName === "read") return `Reading ${root}`;
   if (member.toolName === "ls") return `Listing ${root}`;
@@ -142,6 +153,7 @@ export class ReadGroupHeader {
     readonly controller: ReadGroupingController,
     public members: any[],
     expanded: boolean,
+    readonly kind: ActivityGroupKind,
   ) {
     this[READ_GROUP] = controller;
     this.expanded = expanded;
@@ -161,26 +173,27 @@ export class ReadGroupHeader {
     try {
       if (width < 1) return [];
       const theme = this.controller.getTheme();
-      const style = (color: "error" | "toolTitle" | "muted", text: string) => theme ? theme.fg(color, text) : text;
-      const failed = this.members.filter((member) => member.result?.isError);
+      const style = (color: "error" | "accent" | "toolTitle" | "muted", text: string) => theme ? theme.fg(color, text) : text;
+      const failed = this.members.filter(activityFailed);
       const pending = this.members.some(isPending);
-      const running = this.members.filter((member) => member.executionStarted === true && isPending(member) && !member.result?.isError);
+      const running = this.members.filter((member) => member.executionStarted === true && isPending(member) && !activityFailed(member));
       // Keep the failure count visible even when a long mixed summary is clipped.
       const failureStatus = failed.length ? style("error", `${failed.length} failed`) + style("muted", " · ") : "";
       const marker = activityMarker(failed.length ? "error" : pending ? "active" : "success", theme);
-      let text = `${marker} ${failureStatus}${style("toolTitle", explorationSummary(this.members, pending))}`;
+      const summary = this.kind === "files" ? explorationSummary(this.members, pending) : activityGroupSummary(this.kind, this.members);
+      let text = `${marker} ${failureStatus}${style(pending ? "accent" : "toolTitle", summary)}`;
       if (pending) text += style("muted", "…");
       const shortcut = keyText("app.tools.expand");
       if (shortcut) text += style("muted", ` (${shortcut} to ${this.expanded ? "collapse" : "expand"} all)`);
       const rows = ["", truncateToWidth(text, width, "…")];
       if (!this.expanded && failed.length) {
         const first = failed[0];
-        const error = first.result?.content?.find((part: any) => part?.type === "text");
         const root = displayPath(first.args.path || ".", first.cwd ?? "");
-        const subject = first.toolName === "grep" || first.toolName === "find"
-          ? `${first.toolName} ${inlineText(first.args.pattern)} in ${root}` : root;
+        const subject = this.kind !== "files" ? activityTarget(first) :
+          first.toolName === "grep" || first.toolName === "find"
+            ? `${first.toolName} ${inlineText(first.args.pattern)} in ${root}` : root;
         const target = truncateToWidth(subject, Math.max(8, Math.floor(width / 2)), "…");
-        rows.push(...detailRows(`${target}: ${inlineText(error?.text) || "Tool failed"}`, width, theme, "error", 3));
+        rows.push(...detailRows(`${target}: ${inlineText(activityFailureText(first)) || "Tool failed"}`, width, theme, "error", 3));
       }
       if (!this.expanded && running.length) {
         const parallel = running.length > 1 ? ` · +${running.length - 1} running` : "";
@@ -201,6 +214,7 @@ export class ReadGroupingController {
   private assistantPatches = new Map<any, MethodPatch>();
   private groups: ReadGroupHeader[] = [];
   private lastChildren: any[] = [];
+  private lastKinds: Array<ActivityGroupKind | undefined> = [];
   private metadataVersion = 0;
   private reconciledVersion = -1;
   private lastHideThinking = false;
@@ -253,7 +267,7 @@ export class ReadGroupingController {
       let startsMessage = !isInterrupted(message);
       for (const part of message.content) {
         if (skipThinking && part?.type === "thinking") continue;
-        if (!isExplorationCall(part)) {
+        if (!isGroupableCall(part)) {
           segment = undefined;
           startsMessage = false;
           continue;
@@ -267,7 +281,7 @@ export class ReadGroupingController {
     const visible = positions(false);
     const hidden = positions(true);
     for (const part of message.content) {
-      if (isExplorationCall(part)) {
+      if (isGroupableCall(part)) {
         this.positions.set(part.id, { visible: visible.get(part.id)!, hidden: hidden.get(part.id)! });
       } else if (typeof part?.id === "string") this.positions.delete(part.id);
     }
@@ -314,11 +328,16 @@ export class ReadGroupingController {
     if (child.lastMessage) child.updateContent(child.lastMessage);
   }
 
-  private isHiddenAssistant(child: any): boolean {
+  private isHiddenAssistant(child: any, kind: ActivityGroupKind): boolean {
     const message = child?.lastMessage;
-    return this.assistantPatches.has(child) && child.hideThinkingBlock === true &&
+    const hidden = this.assistantPatches.has(child) && child.hideThinkingBlock === true &&
       message?.role === "assistant" && Array.isArray(message.content) && !isInterrupted(message) &&
-      message.content.every((part: any) => part?.type === "thinking" || isExplorationCall(part));
+      message.content.every((part: any) => part?.type === "thinking" || isGroupableCall(part));
+    if (!hidden) return false;
+    const first = message.content.find((part: any) => part?.type === "toolCall");
+    // A missing component must not erase an intervening category boundary.
+    return !first || (FILE_EXPLORATION_TOOLS.has(first.name) ? "files" :
+      activityGroupKind(first.name, first.arguments)) === kind;
   }
 
   reconcile(): void {
@@ -329,7 +348,7 @@ export class ReadGroupingController {
       if (this.reconciledVersion === this.metadataVersion &&
         this.lastHideThinking === hidden &&
         current.length === this.lastChildren.length &&
-        current.every((child: any, index: number) => child === this.lastChildren[index])) return;
+        current.every((child: any, index: number) => child === this.lastChildren[index] && memberKind(child) === this.lastKinds[index])) return;
       const children = this.container.children.filter((child: any) => child?.[READ_GROUP] !== this);
       const present = new Set(children);
       for (const [child, patch] of this.assistantPatches) {
@@ -343,17 +362,19 @@ export class ReadGroupingController {
       const next: any[] = [];
       const groups: ReadGroupHeader[] = [];
       const active = new Set<any>();
-      const positionOf = (child: any) => isExploration(child)
+      const positionOf = (child: any) => memberKind(child)
         ? this.positions.get(child.toolCallId)?.[hidden ? "hidden" : "visible"] : undefined;
       for (let i = 0; i < children.length;) {
         const first = children[i];
+        const kind = memberKind(first);
         let position = positionOf(first);
         const members = [first];
         let end = i + 1;
         if (position) {
           for (let j = i + 1; j < children.length; j++) {
             const child = children[j];
-            if (hidden && this.isHiddenAssistant(child)) continue;
+            if (hidden && this.isHiddenAssistant(child, kind!)) continue;
+            if (memberKind(child) !== kind) break;
             const candidate = positionOf(child);
             if (!candidate || !canJoin(position, candidate, hidden)) break;
             members.push(child);
@@ -362,8 +383,9 @@ export class ReadGroupingController {
           }
         }
         if (members.length >= 2) {
-          const group = previousGroups.get(first) ??
-            new ReadGroupHeader(this, members, this.mode.toolOutputExpanded === true);
+          const previous = previousGroups.get(first);
+          const group = previous?.kind === kind ? previous :
+            new ReadGroupHeader(this, members, this.mode.toolOutputExpanded === true, kind!);
           group.members = members;
           groups.push(group);
           next.push(group);
@@ -397,6 +419,7 @@ export class ReadGroupingController {
       // Avoid changing array identity while the host iterates over its children.
       this.container.children.splice(0, this.container.children.length, ...next);
       this.lastChildren = [...next];
+      this.lastKinds = next.map(memberKind);
       this.lastHideThinking = hidden;
       this.reconciledVersion = this.metadataVersion;
     } catch {
@@ -435,6 +458,7 @@ export class ReadGroupingController {
     }
     this.groups = [];
     this.lastChildren = [];
+    this.lastKinds = [];
     this.hooks = [];
     this.container = undefined;
   }

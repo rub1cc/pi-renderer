@@ -177,9 +177,8 @@ export function formatStats(
 
 export interface ActivityHeaderOptions {
   status: ActivityStatus;
-  activeVerb: string;
-  successVerb: string;
-  errorVerb?: string;
+  label: string;
+  statusText?: string;
   subject?: string;
   suffix?: string;
 }
@@ -196,19 +195,12 @@ export function renderActivityHeader<TState extends CodexRenderState>(
       : state.callComponent ?? new Text("", 0, 0);
   state.callComponent = component;
 
-  const marker = activityMarker(options.status, theme);
-  const verb =
-    options.status === "error"
-      ? options.errorVerb ?? "Failed"
-      : options.status === "success"
-        ? options.successVerb
-        : options.activeVerb;
-  const verbColor = options.status === "error" ? "error" : "toolTitle";
-  const subject = options.subject ? ` ${options.subject}` : "";
+  const color = options.status === "error" ? "error" : options.status === "active" ? "accent" : "toolTitle";
+  const status = options.statusText ?? (options.status === "error" ? "Failed" : options.status === "active" ? "running…" : "");
   const suffix = options.suffix ? ` ${options.suffix}` : "";
 
   component.setText(
-    `${marker} ${theme.fg(verbColor, theme.bold(verb))}${subject}${suffix}`,
+    `${activityMarker(options.status, theme)} ${theme.fg(color, theme.bold(options.label))}(${options.subject ?? ""})${suffix}${status ? theme.fg(options.status === "error" ? "error" : "muted", ` · ${status}`) : ""}`,
   );
   return component;
 }
