@@ -107,6 +107,70 @@ export function createGenericToolRenderers(toolName: string) {
   };
 }
 
+const BROWSER_TOOLS = new Set([
+  "agent_browser", "agent_browser_code", "agent_browser_action",
+  "agent_browser_qa", "agent_browser_electron", "agent_browser_source",
+  "agent_browser_network_source", "agent_browser_tools",
+]);
+
+interface BrowserRenderState extends CodexRenderState {
+  resultFailed?: boolean;
+}
+
+function browserSubject(toolName: string, args: unknown): string {
+  if (!args || typeof args !== "object") return toolName;
+  const input = args as Record<string, unknown>;
+  // Show operation names, not arbitrary values/code/stdin. Replacing the
+  // native redacted renderer must not reveal secrets in argument previews.
+  if (toolName !== "agent_browser") {
+    const action = typeof input.action === "string" && /^[a-z-]+$/.test(input.action)
+      ? input.action : "";
+    return action ? `${toolName} ${action}` : toolName;
+  }
+  if (!Array.isArray(input.args)) return toolName;
+  const [command, ...rest] = input.args;
+  if (typeof command !== "string" || !/^[a-z][a-z-]*$/.test(command)) return toolName;
+  const safeFlags = new Set(["-i", "--interactive", "--json", "--full", "--labels", "--compact"]);
+  const safe = rest.filter((value): value is string =>
+    typeof value === "string" && (safeFlags.has(value) || /^@e\d+$/.test(value)),
+  );
+  return [toolName, command, ...safe].join(" ");
+}
+
+/** Presentation-only browser adapter; results and image payloads stay intact. */
+export function createBrowserToolRenderers(toolName = "agent_browser") {
+  return {
+    renderShell: "self" as const,
+    renderCall(args: unknown, theme: Theme, context: RendererContext<BrowserRenderState, unknown>) {
+      return renderActivityHeader(context.state, context.lastComponent, {
+        status: context.state.resultFailed ? "error" : activityStatus(context),
+        activeVerb: "Running", successVerb: "Ran",
+        subject: theme.fg("accent", browserSubject(toolName, args)),
+      }, theme);
+    },
+    renderResult(
+      result: AgentToolResult<unknown>, options: ToolRenderResultOptions,
+      theme: Theme, context: RendererContext<BrowserRenderState, unknown>,
+    ) {
+      const details = result.details as { resultCategory?: string; summary?: unknown } | undefined;
+      const nativeError = (result as AgentToolResult<unknown> & { isError?: boolean }).isError;
+      const failed = context.isError || nativeError === true || details?.resultCategory === "failure";
+      context.state.resultFailed = failed;
+      // A completed browser action is not necessarily a verified page change.
+      renderActivityHeader(context.state, context.state.callComponent, {
+        status: failed ? "error" : options.isPartial ? "active" : "success",
+        activeVerb: "Running", successVerb: "Ran",
+        subject: theme.fg("accent", browserSubject(toolName, context.args)),
+      }, theme);
+      return renderTreeOutput(context.lastComponent, {
+        text: getTextOutput(result) || (typeof details?.summary === "string" ? details.summary : ""),
+        expanded: options.expanded, direction: "head", previewRows: 3,
+        tone: failed ? "error" : "output", theme,
+      });
+    },
+  };
+}
+
 function agentDescription(args: unknown, details?: AgentToolDetails): string {
   if (details?.description) return inlineText(details.description);
   if (!args || typeof args !== "object") return "agent";
@@ -271,7 +335,9 @@ export function installGenericToolRenderer(pi: ExtensionAPI): void {
     const webRenderers = createWebToolRenderers(toolName);
     if (webRenderers) return webRenderers;
 
-    // Adapt the full-width Agent card explicitly. All other rich renderers,
+    if (BROWSER_TOOLS.has(toolName)) return createBrowserToolRenderers(toolName);
+
+    // Adapt the full-width Agent card explicitly. Other rich renderers,
     // including apply_patch and SubagentWorkflow, retain their presentation.
     if (toolName === "Agent") return createAgentToolRenderers();
 

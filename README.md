@@ -85,11 +85,19 @@ for tools not yet registered when a session is resumed. It does not re-register
 the tool or replace its execution function. Renderers supplied by later
 resolvers or registered tools remain untouched when either callback is present.
 
-The `Agent` tool is the deliberate exception. `pi-subagents` supplies a
+The `Agent` tool is one deliberate exception. `pi-subagents` supplies a
 Claude-style full-width card, so the renderer replaces only its presentation
 with flat `Running`/`Ran`/`Started` bullet states and a bounded activity/result
 tree. Agent execution and progress metadata are preserved. Other rich custom
 renderers, including `SubagentWorkflow`, remain untouched.
+
+The `agent_browser` family also replaces native full-width cards with compact
+`Running`/`Ran` rows (for example, `agent_browser snapshot -i` or `click @e3`).
+Output previews show three visual rows; expansion reveals the complete wrapped
+result. Headers omit arbitrary input values, eval/code bodies, and stdin to
+avoid exposing secrets. Failure categories remain failures, and completed
+actions are not presented as verified application changes. Tool execution,
+text results, and host-rendered image payloads are unchanged.
 
 The web-access tools are also adapted because their native search/fetch cards
 use a full-width shell. `web_search`, `source_check`, `fetch_content`, and

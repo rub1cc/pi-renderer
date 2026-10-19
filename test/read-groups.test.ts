@@ -35,6 +35,7 @@ function mode() {
     sessionManager: { getCwd: () => "/repo", getEntries: () => [] },
     session: { retryAttempt: 0 },
     footer: { invalidate() {} },
+    programStatus: { handleEvent() {} },
     settingsManager: {
       getShowCacheMissNotices: () => false,
       getShowImages: () => false,
