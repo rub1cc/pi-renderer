@@ -15,6 +15,16 @@ import {
 } from "@earendil-works/pi-tui";
 
 export type ActivityStatus = "active" | "success" | "error";
+export const ACTIVITY_MARKER = "•";
+
+export function activityMarker(status: ActivityStatus, theme?: Theme): string {
+  const color = status === "error" ? "error" : status === "success" ? "success" : "accent";
+  return theme ? theme.fg(color, ACTIVITY_MARKER) : ACTIVITY_MARKER;
+}
+
+export function treeOutputPrefix(width: number): string {
+  return width >= 6 ? "  ⎿ " : width >= 3 ? "⎿ " : "";
+}
 
 export interface CodexRenderState {
   callComponent?: Text;
@@ -186,14 +196,7 @@ export function renderActivityHeader<TState extends CodexRenderState>(
       : state.callComponent ?? new Text("", 0, 0);
   state.callComponent = component;
 
-  const marker = theme.fg(
-    options.status === "error"
-      ? "error"
-      : options.status === "success"
-        ? "success"
-        : "accent",
-    "•",
-  );
+  const marker = activityMarker(options.status, theme);
   const verb =
     options.status === "error"
       ? options.errorVerb ?? "Failed"
@@ -270,7 +273,7 @@ export class TreeOutputComponent implements Component {
       return this.cachedLines;
     }
 
-    const fullPrefix = safeWidth >= 6 ? "  └ " : safeWidth >= 3 ? "└ " : "";
+    const fullPrefix = treeOutputPrefix(safeWidth);
     const continuationPrefix = " ".repeat(visibleWidth(fullPrefix));
     const contentWidth = Math.max(1, safeWidth - visibleWidth(fullPrefix));
     const styleLine = (line: string): string => {

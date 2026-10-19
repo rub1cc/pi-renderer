@@ -12,6 +12,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { ACTIVITY_MARKER, treeOutputPrefix } from "./components.ts";
 
 const PATCH_KEY = Symbol.for("pi.codex-tool-renderer.compaction");
 
@@ -61,7 +62,7 @@ class TreeMarkdownComponent implements Component {
 
   render(width: number): string[] {
     const safeWidth = Math.max(1, width);
-    const rawPrefix = safeWidth >= 6 ? "  └ " : safeWidth >= 3 ? "└ " : "";
+    const rawPrefix = treeOutputPrefix(safeWidth);
     const prefixWidth = visibleWidth(rawPrefix);
     const contentWidth = Math.max(1, safeWidth - prefixWidth);
     const lines = this.markdown.render(contentWidth);
@@ -91,7 +92,7 @@ export function createCompactionTranscriptComponent(
   onToggle: () => void,
 ): Component {
   const content = new Container();
-  const marker = markdownTheme.listBullet("•");
+  const marker = markdownTheme.listBullet(ACTIVITY_MARKER);
   const title = markdownTheme.bold("Compacted context");
   const tokenText = message.tokensBefore.toLocaleString();
   const hint = expanded ? "" : ` · ${shortcutText()} to expand`;

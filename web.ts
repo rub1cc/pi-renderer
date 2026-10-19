@@ -8,6 +8,7 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import {
   type CodexRenderState,
   type RendererContext,
+  activityMarker,
   asNumber,
   getTextOutput,
   inlineText,
@@ -237,7 +238,7 @@ function webNotification(
   error = false,
 ) {
   const container = new Container();
-  const marker = theme.fg(error ? "error" : "success", "•");
+  const marker = activityMarker(error ? "error" : "success", theme);
   container.addChild(
     new Text(
       `${marker} ${theme.fg(error ? "error" : "toolTitle", theme.bold(title))}`,

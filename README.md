@@ -1,7 +1,7 @@
 # @rub1cc/pi-renderer
 
 This Pi extension gives the built-in coding tools a compact, transcript-like
-presentation inspired by the Codex CLI:
+presentation with Claude Code-style exploration summaries:
 
 ## Install
 
@@ -19,16 +19,19 @@ pi -e npm:@rub1cc/pi-renderer
 • Read src/auth.ts
 
 • Ran npm test (1.4s)
-  └ Tests: 12 passed
+  ⎿ Tests: 12 passed
 
 • Searched /refreshSession/ in src
-  └ src/auth.ts:42: return refreshSession(token)
+  ⎿ src/auth.ts:42: return refreshSession(token)
     … +4 lines (ctrl+o to expand)
 ```
 
 ## Behavior
 
 - Transparent activity rows instead of full-width status cards.
+- Shared status dots and `⎿` output gutters for standard activity, compaction,
+  and web notification rows. Dots carry status color; exploration summaries
+  use normal title text with muted expansion hints.
 - Semantic `Reading`/`Read`, `Running`/`Ran`, `Searching`/`Searched`,
   `Writing`/`Wrote`, and `Editing`/`Edited` states.
 - Three-row previews for most tool output; successful reads stay header-only
@@ -49,21 +52,64 @@ pi -e npm:@rub1cc/pi-renderer
   Aborts after tool execution remain visible in the transcript.
 - Tool execution payloads and completed-turn model content are unchanged.
 
-### Consecutive reads
+### Exploration groups
 
-Consecutive reads in the same assistant message collapse into `Read N files`.
-Repeated paths count once, with the number of calls shown separately. Groups
-stop at text, thinking, another tool, or a different assistant message.
+Consecutive `read`, `grep`, `find`, and `ls` calls collapse into a combined
+Claude Code-style summary:
 
-In fullscreen, click the group header to reveal individual calls, then click a
-file's row to expand its contents. Closing a group preserves individual row
-state. Pi's global tool expansion shortcut (default `ctrl+o`) expands/collapses
-both groups and their contents, including in regular terminal mode. Failures
-remain visible in collapsed group summaries.
+```text
+Searched for 1 pattern, read 2 files, listed 1 directory
+```
+
+`grep` and `find` each count as a pattern search. Reads count distinct normalized
+file paths; listings count distinct normalized directory paths. Repeated file or
+directory paths count once, with the total number of calls shown separately.
+Unused categories are omitted. Pending groups use `Searching for`, `reading`,
+and `listing` with an ellipsis, then switch to past tense on completion.
+Single calls keep their normal individual renderer.
+
+Collapsed groups show the actual executing target beneath the summary:
+
+```text
+• Searching for 1 pattern, reading 2 files…
+  ⎿ Reading src/auth.ts
+```
+
+Queued calls and replayed pending calls do not get a live-target row. When tools
+run in parallel, the first running call in transcript order is shown with an
+additional-running count. The target follows execution changes and disappears
+on completion or when the group is expanded to reveal its individual calls.
+
+With `/settings` -> `Hide thinking` on, thinking blocks disappear entirely (no
+collapsed label or leftover spacing), and exploration calls can group across
+hidden thinking and assistant-message boundaries: `Read A` -> thinking ->
+`Read B` becomes `Read 2 files`.
+
+With `Hide thinking` off, reasoning remains visible and groups stop at thinking
+or a different assistant message. Text, non-exploration tools, user/custom
+messages, interruption notices, and unknown transcript components always break
+groups. Bash commands (including `ls` or `cat` run through Bash), edits, and
+writes remain separate; shell commands are not classified for grouping.
+Changing the existing setting updates displayed reasoning and grouping without
+changing saved messages or recreating tool components.
+
+In fullscreen, click the group header to reveal individual calls in their
+original order, then click a tool's row to expand its output. Closing a group
+preserves individual row state. Pi's global tool expansion shortcut (default
+`ctrl+o`) expands/collapses both groups and their contents, including in regular
+terminal mode. Failure counts stay at the front of group summaries so they
+remain visible when long summaries are truncated on narrow terminals. The first
+failed target and error appear separately beneath a collapsed summary, wrapping
+to at most three visual rows. Expanding reveals the original tool errors.
+
+```text
+• 1 failed · Searched for 1 pattern, read 2 files
+  ⎿ src/auth.ts: Permission denied
+```
 
 This is transcript-only grouping: original tool components, arguments, results,
 and session records are retained. HTML exports remain ungrouped. It uses guarded
-private transcript hooks tested against Pi 1.0.2; unknown host/component shapes
+private transcript hooks tested against Pi 1.3.0; unknown host/component shapes
 fall back to normal per-call rendering.
 
 The extension registers `read`, `grep`, `find`, `ls`, `write`, and `edit`.
@@ -77,7 +123,7 @@ fallback:
 
 ```text
 • Called TaskUpdate({"taskId":"6","status":"completed"})
-  └ Updated task #6 status
+  ⎿ Updated task #6 status
 ```
 
 The fallback uses Pi's public `registerToolRenderer` API (Pi 1.0.1+), including
@@ -130,8 +176,9 @@ source. Before publishing, verify `npm pack --dry-run` includes the bundled
   bash renderer.
 - `generic.ts` supplies presentation for renderer-less third-party tools
   without taking ownership of their execution.
-- `read-groups.ts` decorates the interactive transcript with expandable read
-  groups while retaining original tool rows for native keyboard/mouse behavior.
+- `read-groups.ts` decorates the interactive transcript with expandable exploration
+  groups and fully hides reasoning when the existing setting requests it, while
+  retaining original assistant/tool components for native keyboard/mouse behavior.
 - `web.ts` adapts pi-web-access tools and asynchronous fetch notifications
   without changing their search, fetch, or storage behavior.
 - `cancellation.ts` restores no-action aborted prompts and moves the append-only

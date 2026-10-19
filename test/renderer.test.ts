@@ -106,6 +106,7 @@ describe("shared components", () => {
       theme,
     });
     const headLines = render(head);
+    expect(headLines[0]).toStartWith("  ⎿ ");
     expect(headLines.join("\n")).toContain("one");
     expect(headLines.join("\n")).not.toContain("five");
     expect(headLines.at(-1)).toContain("+2 lines");
@@ -118,6 +119,7 @@ describe("shared components", () => {
       theme,
     });
     const tailLines = render(tail);
+    expect(tailLines[0]).toStartWith("  ⎿ ");
     expect(tailLines[0]).toContain("+2 earlier lines");
     expect(tailLines.join("\n")).not.toContain("one");
     expect(tailLines.join("\n")).toContain("five");
@@ -184,7 +186,7 @@ describe("compaction renderer", () => {
     expect(expanded[0]).toContain("• Compacted context");
     expect(expanded.join("\n")).toContain("Current state");
     expect(expanded.join("\n")).toContain("Keep the renderer compact.");
-    expect(expanded.slice(1).some((line) => line.includes("└"))).toBe(true);
+    expect(expanded.slice(1).some((line) => line.includes("⎿"))).toBe(true);
     expect(expanded.every((line) => visibleWidth(line) <= 80)).toBe(true);
   });
 
@@ -287,6 +289,7 @@ describe("built-in renderers", () => {
     for (const [tool, args, expected] of cases) {
       const ctx = context(args, {});
       const call = tool.renderCall(args as any, theme, ctx);
+      expect(render(call)[0]).toStartWith("• ");
       expect(render(call).join("\n")).toContain(expected);
       expect(tool.renderShell).toBe("self");
     }
