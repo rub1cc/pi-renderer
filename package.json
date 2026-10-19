@@ -17,6 +17,8 @@
     "compaction.ts",
     "components.ts",
     "assistant-replies.ts",
+    "user-messages.ts",
+    "sticky-prompt.ts",
     "labels.ts",
     "generic.ts",
     "group-model.ts",

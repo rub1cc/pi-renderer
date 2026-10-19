@@ -25,6 +25,17 @@ pi -e npm:@rub1cc/pi-renderer
 
 ## Behavior
 
+- Compact user messages use `❯ prompt` with the existing user-message background,
+  no top/bottom padding or left margin, and one cell of right padding.
+  The arrow and prompt text align with the assistant dot and reply text. Wrapped
+  continuation lines align with the prompt; Markdown and terminal prompt zones
+  remain native. This is display-only and applies to live and replayed messages.
+- In fullscreen, scrolling away from the bottom pins the user prompt belonging
+  to the section at the top of the viewport as one truncated line. It updates as
+  you scroll between turns. Click it to jump to that prompt's
+  original input. It hides while the original prompt's first row is visible,
+  including after a click, and when you return to the bottom. The native scroll viewport,
+  wheel acceleration, input dock, and regular terminal scrollback stay unchanged.
 - A temporary inline working row at the bottom of the scrolling transcript,
   rather than in the editor border: `✽ Working (1m 15s)`. The symbol cycles
   `✽ → ✻ → ✢ → ∙ → ✢ → ✻ → ✽` with a theme-aware text shimmer. Elapsed time
@@ -267,6 +278,10 @@ source. Before publishing, verify `npm pack --dry-run` includes the bundled
 - `components.ts` contains reusable activity and tree-preview components.
 - `assistant-replies.ts` adds a width-aware prose gutter while preserving native
   Markdown, thinking click targets, terminal prompt zones, and graphics rows.
+- `user-messages.ts` adds an aligned user-prompt gutter with compact padding
+  while preserving Pi's user-message colors, Markdown, and terminal prompt zones.
+- `sticky-prompt.ts` adds a clickable one-line contextual prompt header while the
+  fullscreen transcript is scrolled up, without replacing native scroll state.
 - `labels.ts` defines display aliases and bounded argument summaries for task,
   workflow, question, MCP, and other known tool headers.
 - `group-model.ts` classifies safe activity categories and formats operation
