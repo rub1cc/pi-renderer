@@ -2,6 +2,10 @@
   "name": "@rub1cc/pi-renderer",
   "version": "0.1.0",
   "description": "Compact Codex-style tool rendering for Pi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rub1cc/pi-renderer.git"
+  },
   "type": "module",
   "exports": {
     ".": "./index.ts",

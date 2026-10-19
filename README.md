@@ -145,3 +145,8 @@ of execution. No public API currently exists for removing an empty aborted
 turn, so `cancellation.ts` limits its TUI-only patch to that behavior and leaves
 aborts after tool execution on Pi's normal path.
 
+## Releases
+
+See [RELEASING.md](RELEASING.md) for npm trusted publishing and tag-based releases
+with `npm version`.
+
