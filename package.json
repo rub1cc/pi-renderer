@@ -16,6 +16,7 @@
     "cancellation.ts",
     "compaction.ts",
     "components.ts",
+    "codemode.ts",
     "assistant-replies.ts",
     "user-messages.ts",
     "sticky-prompt.ts",

@@ -189,7 +189,7 @@ describe("renderer registration", () => {
   test("explicitly overrides Agent, browser and web cards without execution replacement", () => {
     const resolve = installResolver();
     const original = () => ({ render: () => [], invalidate() {} });
-    for (const name of ["Agent", "agent_browser", "agent_browser_code", "agent_browser_action",
+    for (const name of ["Agent", "codemode", "agent_browser", "agent_browser_code", "agent_browser_action",
       "agent_browser_qa", "agent_browser_electron", "agent_browser_source",
       "agent_browser_network_source", "agent_browser_tools",
       "web_search", "source_check", "fetch_content", "get_search_content"]) {

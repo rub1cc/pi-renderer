@@ -151,9 +151,12 @@ describe("assistant reply markers", () => {
     expect(markers(component)).toBe(1);
   });
 
-  test("marker colors are resolved from the current theme at render time", () => {
+  test("marker uses the current theme accent at render time", () => {
     let color = 31;
-    const theme = { fg: (_: string, value: string) => `\x1b[${color}m${value}\x1b[39m` } as Theme;
+    const theme = { fg: (token: string, value: string) => {
+      expect(token).toBe("accent");
+      return `\x1b[${color}m${value}\x1b[39m`;
+    } } as Theme;
     const { component } = setup([prose("Reply")], true, 1, () => theme);
     expect(component.render(80).join("\n")).toContain("\x1b[31m⏺\x1b[39m");
     color = 32;

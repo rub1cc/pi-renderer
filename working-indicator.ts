@@ -6,7 +6,8 @@ import {
 import { mixColors, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { inlineText } from "./components.ts";
 
-const PATCH = Symbol.for("pi.codex-tool-renderer.working-indicator");
+// A separate key lets /reload retire the previous process-global hook safely.
+const PATCH = Symbol.for("pi.codex-tool-renderer.working-indicator.session-owned");
 export const WORKING_FRAMES = ["✽", "✻", "✢", "∙", "✢", "✻", "✽"] as const;
 export const WORKING_FRAME_MS = 150;
 const SHIMMER_MS = 2000;
@@ -232,11 +233,14 @@ export class WorkingIndicatorController {
   }
 }
 
-interface PatchState {
-  enabled: boolean;
+interface SessionOwner {
+  sessionManager: object;
   controllers: Map<any, WorkingIndicatorController>;
   factory: (mode: any) => WorkingIndicatorController;
-  getTheme?: () => Theme | undefined;
+}
+
+interface PatchState {
+  owners: Map<object, SessionOwner>;
 }
 
 /** Guarded Pi 1.3 status hooks; unsupported shapes retain their native loader. */
@@ -245,15 +249,16 @@ export function installWorkingIndicator(pi: ExtensionAPI): void {
   let state = prototype[PATCH] as PatchState | undefined;
   if (!state) {
     if (!["showStatusIndicator", "handleEvent"].every(name => typeof prototype[name] === "function")) return;
-    state = { enabled: false, controllers: new Map(), factory: undefined! };
+    state = { owners: new Map() };
     Object.defineProperty(prototype, PATCH, { value: state });
     const shared = state;
     const getController = (mode: any): WorkingIndicatorController | undefined => {
-      if (!shared.enabled) return;
-      let controller = shared.controllers.get(mode);
+      const owner = shared.owners.get(mode.sessionManager);
+      if (!owner) return;
+      let controller = owner.controllers.get(mode);
       if (!controller) {
-        controller = shared.factory(mode);
-        shared.controllers.set(mode, controller);
+        controller = owner.factory(mode);
+        owner.controllers.set(mode, controller);
       }
       return controller;
     };
@@ -262,7 +267,7 @@ export function installWorkingIndicator(pi: ExtensionAPI): void {
       const result = showStatus.apply(this, args);
       if (args[0]?.kind === "working") {
         try { getController(this)?.adopt(args[0]); }
-        catch { shared.controllers.get(this)?.detach(); }
+        catch { shared.owners.get(this.sessionManager)?.controllers.get(this)?.detach(); }
       }
       return result;
     };
@@ -273,16 +278,30 @@ export function installWorkingIndicator(pi: ExtensionAPI): void {
     };
   }
   const shared = state;
-  // Prototype hooks survive /reload; swap controllers, not another wrapper layer.
-  for (const controller of shared.controllers.values()) controller.detach();
-  shared.controllers.clear();
-  shared.enabled = true;
-  shared.factory = mode => new WorkingIndicatorController(mode, () => shared.getTheme?.());
-  pi.on("session_start", (_event, context) => { shared.getTheme = () => context.ui.theme; });
+  let owner: SessionOwner | undefined;
+  const release = (previous: SessionOwner, resumeNative: boolean) => {
+    if (shared.owners.get(previous.sessionManager) === previous) shared.owners.delete(previous.sessionManager);
+    for (const controller of previous.controllers.values()) controller.detach(resumeNative);
+    previous.controllers.clear();
+  };
+  // Factories also run for SDK children, even when their extension is filtered
+  // out later. Only a bound TUI session may claim or release its own controllers.
+  pi.on("session_start", (_event, context) => {
+    if (context.mode !== "tui") return;
+    if (owner) release(owner, true);
+    const sessionManager = context.sessionManager;
+    const previous = shared.owners.get(sessionManager);
+    if (previous) release(previous, true);
+    const ui = context.ui;
+    owner = {
+      sessionManager,
+      controllers: new Map(),
+      factory: mode => new WorkingIndicatorController(mode, () => ui.theme),
+    };
+    shared.owners.set(sessionManager, owner);
+  });
   pi.on("session_shutdown", (event) => {
-    shared.enabled = false;
-    for (const controller of shared.controllers.values()) controller.detach(event.reason === "reload");
-    shared.controllers.clear();
-    shared.getTheme = undefined;
+    if (owner) release(owner, event.reason === "reload");
+    owner = undefined;
   });
 }

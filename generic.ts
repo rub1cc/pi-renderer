@@ -17,6 +17,7 @@ import {
 import { createWebToolRenderers } from "./web.ts";
 import { TOOL_LABELS, toolArgumentSummary, toolLabel } from "./labels.ts";
 import { codexBashRenderers } from "./renderers.ts";
+import { createCodemodeRenderers } from "./codemode.ts";
 
 interface AgentToolDetails {
   description?: string;
@@ -306,6 +307,7 @@ export function installGenericToolRenderer(pi: ExtensionAPI): void {
     // Sandbox may bundle an older renderer. Resolve presentation here without
     // registering bash again or touching its sandbox-owned execution function.
     if (toolName === "bash") return codexBashRenderers as ToolRenderers;
+    if (toolName === "codemode") return createCodemodeRenderers();
 
     const webRenderers = createWebToolRenderers(toolName);
     if (webRenderers) return webRenderers;

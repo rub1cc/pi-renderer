@@ -37,7 +37,7 @@ class ReplyProse implements Component {
     const mark = firstText >= 0 && !this.frame.marked;
     if (mark) this.frame.marked = true;
     const theme = this.frame.getTheme();
-    const marker = theme ? theme.fg("text", ASSISTANT_REPLY_MARKER) : ASSISTANT_REPLY_MARKER;
+    const marker = theme ? theme.fg("accent", ASSISTANT_REPLY_MARKER) : ASSISTANT_REPLY_MARKER;
     return lines.map((line, index) => {
       if (isGraphicsRow(line)) return line;
       const prefix = mark && index === firstText

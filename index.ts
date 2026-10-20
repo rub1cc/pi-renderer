@@ -111,6 +111,8 @@ export function registerCodexRenderers(pi: ExtensionAPI): void {
 
 export default registerCodexRenderers;
 
+export { createCodemodeRenderers } from "./codemode.ts";
+
 export {
   codexBashRenderers,
   createCodexBashRenderers,

@@ -28,6 +28,7 @@ function setup(scrollbar: "hidden" | "always" = "hidden", theme?: any) {
   ]);
   const mode: any = { chatContainer: chat, documentContainer: document,
     transcriptScrollView: scroll, fullscreenLayoutRoot: root, renderer: { mode: "fullscreen" },
+    sessionManager: {}, pendingTools: new Map(), settingsManager: { getShowCacheMissNotices: () => false },
     ui: { requestRender() {} } };
   const controller = new StickyPromptController(mode, () => theme);
   expect(controller.attach()).toBe(true);
@@ -283,35 +284,140 @@ describe("sticky contextual prompt", () => {
 });
 
 describe("sticky prompt host hooks", () => {
-  function install() {
+  function install(mode?: any) {
     const handlers = new Map<string, Function[]>();
     installStickyPrompt({ on(name: string, callback: Function) {
       handlers.set(name, [...handlers.get(name) ?? [], callback]);
     } } as unknown as ExtensionAPI);
-    const shutdown = () => { for (const handler of handlers.get("session_shutdown") ?? []) handler({}); };
+    const emit = (name: string, context = {}) => {
+      for (const handler of handlers.get(name) ?? []) handler({ type: name }, context);
+    };
+    const shutdown = () => emit("session_shutdown");
     cleanups.push(shutdown);
-    return shutdown;
+    if (mode) emit("session_start", { mode: "tui", sessionManager: mode.sessionManager,
+      ui: { theme: (InteractiveMode.prototype as any).createExtensionUIContext.call({}).theme } });
+    return { emit, shutdown };
   }
 
-  test("mounting uses the same root/viewport and reload never stacks headers", () => {
-    const shutdown = install();
-    const { mode, controller, root, scroll } = setup();
-    controller.detach();
+  function mount(mode: any) {
     const mounted: any[] = [];
     const tui = { addChild() {}, setLayoutRoot(value: any) { mounted.push(value); },
       [Symbol.for("@earendil-works/pi-tui/viewport")]: true };
-    const mount = (InteractiveMode.prototype as any).mountInteractiveTui;
-    mount.call(mode, tui, []);
-    expect(mounted).toEqual([root]);
+    (InteractiveMode.prototype as any).mountInteractiveTui.call(mode, tui, []);
+    return mounted;
+  }
+
+  test("child loading, headless starts, and cleanup preserve the parent header and theme", () => {
+    const { mode, controller, root, scroll, lines } = setup();
+    controller.detach();
+    install(mode);
+    mount(mode);
+    lines();
+    scroll.scrollBy(-5);
+    const before = renderLayoutFrame(root, 40, 10, () => {}).lines;
+    const header = root.children[0];
+    const updateLayout = scroll.updateLayout;
+    const children = [install(), install()];
+    expect(root.children[0]).toBe(header);
+    for (const [index, child] of children.entries()) {
+      child.emit("session_start", {
+        mode: ["sdk", "rpc"][index], sessionManager: {},
+        get ui() { throw new Error("headless UI must not be read"); },
+      });
+      child.shutdown();
+      expect(root.children).toHaveLength(3);
+      expect(root.children[0]).toBe(header);
+      expect(scroll.updateLayout).toBe(updateLayout);
+      expect(renderLayoutFrame(root, 40, 10, () => {}).lines).toEqual(before);
+    }
+    mount(mode);
+    expect(root.children[0]).toBe(header);
+  });
+
+  test("only the owning TUI shutdown removes its header", () => {
+    const first = setup();
+    const second = setup();
+    first.controller.detach();
+    second.controller.detach();
+    const firstRuntime = install(first.mode);
+    const secondRuntime = install(second.mode);
+    mount(first.mode);
+    mount(second.mode);
+    firstRuntime.shutdown();
+    expect(first.root.children).toHaveLength(2);
+    expect(second.root.children).toHaveLength(3);
+    secondRuntime.shutdown();
+    expect(second.root.children).toHaveLength(2);
+  });
+
+  test("a stale runtime cannot remove the replacement owner's header", () => {
+    const { mode, controller, root } = setup();
+    controller.detach();
+    const previous = install(mode);
+    mount(mode);
+    install(mode);
+    mount(mode);
+    const header = root.children[0];
+    previous.shutdown();
+    expect(root.children).toHaveLength(3);
+    expect(root.children[0]).toBe(header);
+    mount(mode);
+    expect(root.children[0]).toBe(header);
+  });
+
+  test("initial mount before session binding stays native until TUI history renders", () => {
+    const { mode, controller, root } = setup();
+    controller.detach();
+    const runtime = install();
+    mount(mode);
+    expect(root.children).toHaveLength(2);
+    runtime.emit("session_start", { mode: "sdk", sessionManager: mode.sessionManager, ui: {} });
+    mount(mode);
+    expect(root.children).toHaveLength(2);
+    runtime.emit("session_start", { mode: "tui", sessionManager: mode.sessionManager, ui: {} });
+    expect(root.children).toHaveLength(3);
+    (InteractiveMode.prototype as any).renderSessionItems.call(mode, []);
+    expect(root.children).toHaveLength(3);
+  });
+
+  test("reload and session replacement restore an idle header after history renders before binding", () => {
+    for (const replaceSession of [false, true]) {
+      const { mode, controller, root, scroll, lines } = setup();
+      controller.detach();
+      const old = install(mode);
+      mount(mode);
+      old.shutdown();
+      expect(root.children).toHaveLength(2);
+      if (replaceSession) mode.sessionManager = {};
+      const next = install();
+      // Pi rebuilds history in beforeSessionStart; it does not remount afterward.
+      (InteractiveMode.prototype as any).renderSessionItems.call(mode, []);
+      expect(root.children).toHaveLength(2);
+      next.emit("session_start", { mode: "tui", sessionManager: mode.sessionManager, ui: {} });
+      expect(root.children).toHaveLength(3);
+      old.shutdown();
+      lines();
+      scroll.scrollBy(-5);
+      expect(lines()[0]).toStartWith("❯ Latest prompt");
+      expect(root.children).toHaveLength(3);
+    }
+  });
+
+  test("mounting uses the same root/viewport and reload never stacks headers", () => {
+    const { mode, controller, root, scroll } = setup();
+    controller.detach();
+    const { shutdown } = install(mode);
+    const hook = (InteractiveMode.prototype as any).mountInteractiveTui;
+    expect(mount(mode)).toEqual([root]);
     expect(root.children).toHaveLength(3);
     expect(mode.transcriptScrollView).toBe(scroll);
-    mount.call(mode, tui, []);
+    mount(mode);
     expect(root.children).toHaveLength(3);
     shutdown();
     expect(root.children).toHaveLength(2);
-    install();
-    expect((InteractiveMode.prototype as any).mountInteractiveTui).toBe(mount);
-    mount.call(mode, tui, []);
+    install(mode);
+    expect((InteractiveMode.prototype as any).mountInteractiveTui).toBe(hook);
+    mount(mode);
     expect(root.children).toHaveLength(3);
   });
 });

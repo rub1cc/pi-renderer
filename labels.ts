@@ -6,6 +6,7 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
   find: "Glob",
   ls: "List",
   bash: "Bash",
+  codemode: "Codemode",
   apply_patch: "Patch",
   write: "Write",
   edit: "Update",
@@ -79,6 +80,7 @@ export function toolArgumentSummary(name: string, args: unknown): string {
   const id = bounded(input.taskId ?? input.task_id ?? input.agent_id);
   const task = id ? `#${id.replace(/^#/, "")}` : "";
   switch (name) {
+    case "codemode": return "script";
     case "agent_browser":
     case "agent_browser_code":
     case "agent_browser_tools":

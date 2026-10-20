@@ -3,7 +3,7 @@ import { ScrollView, type Component, type TuiMouseEvent, stripTerminalSequences,
 import { inlineText } from "./components.ts";
 import { USER_MESSAGE_MARKER } from "./user-messages.ts";
 
-const PATCH = Symbol.for("pi.codex-tool-renderer.sticky-prompt");
+const PATCH = Symbol.for("pi.codex-tool-renderer.sticky-prompt.session-owned");
 type Method = (this: any, ...args: any[]) => any;
 
 /** Use visible, transformed text rather than exposing hidden raw prompt content. */
@@ -206,11 +206,26 @@ export class StickyPromptController {
   }
 }
 
-interface PatchState {
-  enabled: boolean;
+interface SessionOwner {
+  sessionManager: object;
   controllers: Map<any, StickyPromptController>;
   factory: (mode: any) => StickyPromptController;
-  getTheme?: () => Theme | undefined;
+}
+
+interface PatchState {
+  owners: Map<object, SessionOwner>;
+  modes: WeakMap<object, WeakRef<any>>;
+}
+
+function attachController(owner: SessionOwner, mode: any): void {
+  try {
+    let controller = owner.controllers.get(mode);
+    if (!controller) {
+      controller = owner.factory(mode);
+      owner.controllers.set(mode, controller);
+    }
+    controller.attach();
+  } catch { owner.controllers.get(mode)?.detach(); }
 }
 
 /** Keep Pi's primary ScrollView, dock and input routing; add one layout sibling. */
@@ -218,37 +233,50 @@ export function installStickyPrompt(pi: ExtensionAPI): void {
   const prototype = InteractiveMode.prototype as any;
   let state = prototype[PATCH] as PatchState | undefined;
   if (!state) {
-    state = { enabled: false, controllers: new Map(), factory: undefined! };
+    state = { owners: new Map(), modes: new WeakMap() };
     Object.defineProperty(prototype, PATCH, { value: state });
     const shared = state;
     for (const name of ["mountInteractiveTui", "handleEvent", "renderSessionItems"]) {
       const original = prototype[name] as Method;
       if (typeof original !== "function") continue;
       prototype[name] = function (...args: any[]) {
-        if (shared.enabled) {
-          try {
-            let controller = shared.controllers.get(this);
-            if (!controller) {
-              controller = shared.factory(this);
-              shared.controllers.set(this, controller);
-            }
-            controller.attach();
-          } catch { shared.controllers.get(this)?.detach(); }
+        const sessionManager = this.sessionManager;
+        if (sessionManager && typeof sessionManager === "object") {
+          if (shared.modes.get(sessionManager)?.deref() !== this) shared.modes.set(sessionManager, new WeakRef(this));
+          const owner = shared.owners.get(sessionManager);
+          if (owner) attachController(owner, this);
         }
         return original.apply(this, args);
       };
     }
   }
   const shared = state;
-  for (const controller of shared.controllers.values()) controller.detach();
-  shared.controllers.clear();
-  shared.enabled = true;
-  shared.factory = mode => new StickyPromptController(mode, () => shared.getTheme?.());
-  pi.on("session_start", (_event, context) => { shared.getTheme = () => context.ui.theme; });
+  let owner: SessionOwner | undefined;
+  const release = (previous: SessionOwner) => {
+    if (shared.owners.get(previous.sessionManager) === previous) shared.owners.delete(previous.sessionManager);
+    for (const controller of previous.controllers.values()) controller.detach();
+    previous.controllers.clear();
+  };
+  pi.on("session_start", (_event, context) => {
+    if (context.mode !== "tui") return;
+    if (owner) release(owner);
+    const sessionManager = context.sessionManager;
+    const previous = shared.owners.get(sessionManager);
+    if (previous) release(previous);
+    const ui = context.ui;
+    owner = {
+      sessionManager,
+      controllers: new Map(),
+      factory: mode => new StickyPromptController(mode, () => ui.theme),
+    };
+    shared.owners.set(sessionManager, owner);
+    // Reload/session replacement rebuild history before session_start, without
+    // remounting. Remember the mode weakly so binding can restore an idle header.
+    const mode = shared.modes.get(sessionManager)?.deref();
+    if (mode) attachController(owner, mode);
+  });
   pi.on("session_shutdown", () => {
-    shared.enabled = false;
-    for (const controller of shared.controllers.values()) controller.detach();
-    shared.controllers.clear();
-    shared.getTheme = undefined;
+    if (owner) release(owner);
+    owner = undefined;
   });
 }

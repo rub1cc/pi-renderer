@@ -46,6 +46,11 @@ pi -e npm:@rub1cc/pi-renderer
   receipt until the next run or transcript change. Short, cancelled, and failed
   turns leave no receipt; receipts are not reconstructed from saved history.
   Set `PI_RENDERER_REDUCED_MOTION=1` for a static symbol and no shimmer.
+- Working status and sticky-prompt controllers belong to their bound TUI
+  session. In-process SDK agents can load the renderer without resetting the
+  parent indicator, elapsed clock, theme, or sticky header. Child cleanup does
+  not disable the parent UI; parent reload and session replacement still clean
+  up their own controllers.
 - One `⏺` marker per visible assistant prose message, including progress updates
   and final replies. Paragraphs and wrapped continuation lines align with the
   text. Thinking-only and tool-only messages do not get a marker; tool calls and
@@ -232,6 +237,24 @@ with `Agent(type, "description")` headers and a bounded activity/result tree.
 Agent execution and progress metadata are preserved. `SubagentWorkflow` uses
 the `Workflow(name)` header while retaining its rich progress/results view.
 
+The `codemode` tool uses a compact execution-group summary rather than a script
+card:
+
+```text
+• Codemode · 2 Bash calls · 2.1s
+```
+
+Running scripts show the latest still-running nested call. Successful script
+output stays collapsed; clicking or using Pi's tool-expansion shortcut reveals
+the highlighted source, recorded nested arguments/statuses/durations/costs,
+and full script output. Nested argument previews retain Pi's own truncation.
+Script failures, caught nested failures, cancellations, images, and full-output
+file references remain visible without expansion. Counts come from execution
+metadata, never inferred JavaScript intent. A completed script is not a claim
+that every command succeeded: Bash can return a nonzero exit code without
+throwing. Codemode stays separate from exploration groups and does not change
+execution, permission checks, or persisted results.
+
 The `agent_browser` family also replaces native full-width cards with compact
 `Browser(...)` rows (for example, `Browser(snapshot -i)` or `Browser(click @e3)`).
 Output previews show three visual rows; expansion reveals the complete wrapped
@@ -294,6 +317,8 @@ source. Before publishing, verify `npm pack --dry-run` includes the bundled
   bash renderer.
 - `generic.ts` supplies presentation for renderer-less third-party tools
   without taking ownership of their execution.
+- `codemode.ts` summarizes script batches using native nested-call metadata,
+  preserving expanded source/output and host-owned image rendering.
 - `read-groups.ts` decorates the interactive transcript with expandable activity
   groups and fully hides reasoning when the existing setting requests it, while
   retaining original assistant/tool components for native keyboard/mouse behavior.

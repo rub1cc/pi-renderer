@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   initTheme,
   InteractiveMode,
@@ -22,7 +22,7 @@ beforeAll(async () => { await initTheme("dark", false); });
 const cleanups: Array<() => void> = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); });
 
-function install() {
+function install(mode?: any) {
   const handlers = new Map<string, Function[]>();
   const pi = {
     on(name: string, handler: Function) {
@@ -34,6 +34,7 @@ function install() {
     for (const handler of handlers.get(name) ?? []) handler({ type: name, ...details }, context);
   };
   cleanups.push(() => emit("session_shutdown"));
+  if (mode) emit("session_start", { mode: "tui", sessionManager: mode.sessionManager, ui: { theme: currentTheme() } });
   return { pi, emit };
 }
 
@@ -248,9 +249,95 @@ describe("completed duration receipt", () => {
 });
 
 describe("native working indicator lifecycle", () => {
-  test("renders only at the transcript tail, without adding children or persisting messages", async () => {
-    install();
+  test("child factory loading, headless starts, and cleanup preserve the parent clock and theme", () => {
+    const clock = spyOn(performance, "now").mockReturnValue(0);
+    cleanups.push(() => clock.mockRestore());
     const mode = host();
+    install(mode);
+    mode.showWorkingStatusIndicator();
+    const native = mode.activeStatusIndicator;
+    const render = mode.chatContainer.render;
+    clock.mockReturnValue(61000);
+    const before = mode.chatContainer.render(80);
+
+    const children = [install(), install(), install()];
+    // An excluded extension may run its factory but never bind any handlers.
+    expect(mode.chatContainer.render).toBe(render);
+    expect(native.renderInBorder(80)).toBe("");
+    for (const [index, child] of children.entries()) {
+      child.emit("session_start", {
+        mode: ["sdk", "rpc", "print"][index],
+        sessionManager: {},
+        get ui() { throw new Error("headless UI must not be read"); },
+      });
+      expect(mode.chatContainer.render(80)).toEqual(before);
+      child.emit("session_shutdown", {}, { reason: "quit" });
+      expect(native.intervalId).toBeNull();
+      expect(native.renderInBorder(80)).toBe("");
+    }
+    clock.mockReturnValue(65000);
+    expect(rows(mode).at(-1)).toContain("Working (1m 5s)");
+    // Later tool rounds still adopt new native indicator instances.
+    mode.showWorkingStatusIndicator();
+    expect(rows(mode).filter((line: string) => line.includes("Working"))).toHaveLength(1);
+    expect(rows(mode).at(-1)).toContain("Working (1m 5s)");
+    expect(mode.activeStatusIndicator.renderInBorder(80)).toBe("");
+  });
+
+  test("separate TUI sessions own independent indicators and cleanup", () => {
+    const firstMode = host();
+    const secondMode = host();
+    const first = install(firstMode);
+    const second = install(secondMode);
+    firstMode.showWorkingStatusIndicator();
+    secondMode.showWorkingStatusIndicator();
+    first.emit("session_shutdown", {}, { reason: "quit" });
+    expect(rows(firstMode)).toEqual([]);
+    expect(rows(secondMode).at(-1)).toContain("Working");
+    expect(secondMode.activeStatusIndicator.renderInBorder(80)).toBe("");
+    second.emit("session_shutdown", {}, { reason: "reload" });
+    expect(rows(secondMode)).toEqual([]);
+  });
+
+  test("a stale runtime shutdown cannot release a newer owner of the same session", () => {
+    const mode = host();
+    const old = install(mode);
+    mode.showWorkingStatusIndicator();
+    install(mode);
+    mode.showWorkingStatusIndicator();
+    old.emit("session_shutdown", {}, { reason: "quit" });
+    expect(rows(mode).filter((line: string) => line.includes("Working"))).toHaveLength(1);
+    expect(mode.activeStatusIndicator.renderInBorder(80)).toBe("");
+    expect(mode.activeStatusIndicator.intervalId).toBeNull();
+  });
+
+  test("unbound factories and headless sessions never claim another mode", () => {
+    const runtime = install();
+    const mode = host();
+    runtime.emit("session_start", { mode: "sdk", sessionManager: mode.sessionManager, ui: {} });
+    mode.showWorkingStatusIndicator();
+    expect(rows(mode)).toEqual([]);
+    expect(mode.activeStatusIndicator.renderInBorder(80)).toContain("Working");
+    expect(mode.activeStatusIndicator.intervalId).not.toBeNull();
+  });
+
+  test("session replacement releases the old session without disabling the new one", () => {
+    const mode = host();
+    const previous = install(mode);
+    mode.showWorkingStatusIndicator();
+    previous.emit("session_shutdown", {}, { reason: "new" });
+    mode.clearStatusIndicator();
+    mode.sessionManager = {};
+    install(mode);
+    mode.showWorkingStatusIndicator();
+    previous.emit("session_shutdown", {}, { reason: "quit" });
+    expect(rows(mode).at(-1)).toContain("Working (0s)");
+    expect(mode.activeStatusIndicator.renderInBorder(80)).toBe("");
+  });
+
+  test("renders only at the transcript tail, without adding children or persisting messages", async () => {
+    const mode = host();
+    install(mode);
     const transcript = new Text("user prompt", 0, 0);
     mode.chatContainer.addChild(transcript);
     await mode.handleEvent({ type: "agent_start" });
@@ -271,8 +358,8 @@ describe("native working indicator lifecycle", () => {
   });
 
   test("removes the row on completion, abort cleanup, visibility changes, and non-working statuses", async () => {
-    install();
     const mode = host();
+    install(mode);
     for (const action of [
       () => mode.handleEvent({ type: "agent_end" }),
       () => mode.clearStatusIndicator(),
@@ -323,8 +410,8 @@ describe("native working indicator lifecycle", () => {
   });
 
   test("editor changes cannot reintroduce the border or fallback row", () => {
-    install();
     const mode = host();
+    install(mode);
     mode.showWorkingStatusIndicator();
     const native = mode.activeStatusIndicator;
     mode.editor = { embedWorkingStatus: false };
@@ -339,8 +426,8 @@ describe("native working indicator lifecycle", () => {
   });
 
   test("native frame changes cannot restart a second animation timer", () => {
-    const extension = install();
     const mode = host();
+    const extension = install(mode);
     mode.showWorkingStatusIndicator();
     const native = mode.activeStatusIndicator;
     mode.setWorkingIndicator({ frames: ["a", "b"], intervalMs: 10 });
@@ -355,8 +442,8 @@ describe("native working indicator lifecycle", () => {
   });
 
   test("shutdown and reload restore native rendering and timers without stacking wrappers", () => {
-    const first = install();
     const mode = host();
+    const first = install(mode);
     const render = mode.chatContainer.render;
     mode.showWorkingStatusIndicator();
     const native = mode.activeStatusIndicator;
@@ -365,7 +452,7 @@ describe("native working indicator lifecycle", () => {
     expect(mode.chatContainer.render).toBe(render);
     expect(native.renderInBorder(80)).toContain("Working");
     expect(native.intervalId).not.toBeNull();
-    install();
+    install(mode);
     expect(mode.showStatusIndicator).toBe(showStatus);
     mode.showWorkingStatusIndicator();
     expect(rows(mode).filter((line: string) => line.includes("Working"))).toHaveLength(1);
@@ -375,8 +462,8 @@ describe("native working indicator lifecycle", () => {
 
   test("quit and session replacement do not restart a native animation timer", () => {
     for (const reason of ["quit", "new", "resume", "fork"]) {
-      const extension = install();
       const mode = host();
+      const extension = install(mode);
       mode.showWorkingStatusIndicator();
       const native = mode.activeStatusIndicator;
       extension.emit("session_shutdown", {}, { reason });
@@ -387,8 +474,8 @@ describe("native working indicator lifecycle", () => {
   });
 
   test("later extension wrappers survive detach and retained hooks pass through", () => {
-    const extension = install();
     const mode = host();
+    const extension = install(mode);
     mode.showWorkingStatusIndicator();
     const native = mode.activeStatusIndicator;
     const border = native.renderInBorder;
@@ -405,8 +492,8 @@ describe("native working indicator lifecycle", () => {
   });
 
   test("redraw ticks stop after native disposal", async () => {
-    install();
     const mode = host();
+    install(mode);
     let renders = 0;
     mode.ui.requestRender = () => { renders++; };
     mode.showWorkingStatusIndicator();
@@ -449,9 +536,9 @@ describe("native working indicator lifecycle", () => {
   });
 
   test("the inline tail neither closes the live preview nor splits consecutive calls", () => {
-    const { pi } = install();
-    installReadGrouping(pi);
     const mode = host();
+    const { pi } = install(mode);
+    installReadGrouping(pi);
     mode.hideThinkingBlock = true;
     mode.toolOutputExpanded = false;
     const grouping = new ReadGroupingController(mode);
